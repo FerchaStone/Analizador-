@@ -2,18 +2,18 @@
 Analizador de acciones - dashboard (Streamlit)
 
 Se escribe uno o mas tickers de EE.UU. y muestra, para cada uno:
-- 6 indicadores ordenados por importancia, cada uno con valor, calificacion
-  en palabras, una frase simple y la escala de referencia
-- una nota ponderada de 0 a 10
+- una nota de 0 a 10 con anillo de color
+- 6 indicadores ordenados por importancia, con valor, calificacion en palabras,
+  barra de puntaje, frase simple y escala de referencia
 - chequeos de riesgo (reverse splits, dilucion, caja)
 - grafico de precio del ultimo anio
-- boton para descargar todo en Excel
+- si hay varios tickers, una tabla comparativa arriba
 
 Datos: Yahoo Finance via yfinance. Son orientativos: verificar antes de decidir.
 """
 
 import html
-import io
+import time
 from datetime import datetime, timedelta
 
 import pandas as pd
@@ -27,22 +27,81 @@ st.set_page_config(page_title="Analizador de acciones", page_icon="📊", layout
 # ---------------------------------------------------------------------------
 st.markdown(
     """<style>
-.block-container {padding-top: 2rem; max-width: 1200px;}
-.tarjeta {background: rgba(128,128,128,0.07); border-radius: 14px; padding: 16px 18px;
-  border-left: 6px solid var(--c); margin-bottom: 14px; min-height: 230px;}
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+html, body, [class*="css"], .stMarkdown, .stTextInput, button {font-family: 'Inter', sans-serif !important;}
+#MainMenu, footer, [data-testid="stToolbar"], [data-testid="stDecoration"] {visibility: hidden;}
+.block-container {padding-top: 1.5rem; max-width: 1180px;}
+
+.hero {background: linear-gradient(135deg, #312e81 0%, #6d28d9 55%, #db2777 100%);
+  border-radius: 20px; padding: 28px 32px; color: #fff; margin-bottom: 18px;
+  box-shadow: 0 10px 30px rgba(109,40,217,.25);}
+.hero h1 {font-size: 34px; font-weight: 800; margin: 0; color: #fff; padding: 0;}
+.hero p {margin: 6px 0 0; opacity: .85; font-size: 15px;}
+
+div[data-testid="stForm"] {border: none; padding: 0;}
+.stTextInput input {border-radius: 12px !important; font-size: 16px !important; padding: 12px 14px !important;}
+div[data-testid="stFormSubmitButton"] button {width: 100%; border-radius: 12px; border: none;
+  background: linear-gradient(135deg, #6d28d9, #db2777); color: #fff; font-weight: 700;
+  padding: 11px 0; transition: transform .15s, box-shadow .15s;}
+div[data-testid="stFormSubmitButton"] button:hover {transform: translateY(-1px);
+  box-shadow: 0 6px 18px rgba(219,39,119,.35); color: #fff;}
+
+.empresa {display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;
+  gap: 18px; margin: 10px 0 18px;}
+.empresa .titulo {font-size: 28px; font-weight: 800; line-height: 1.15;}
+.empresa .sub {opacity: .65; font-size: 14px; margin-top: 4px;}
+.tick {display:inline-block; background: rgba(109,40,217,.12); color: #6d28d9; border-radius: 8px;
+  padding: 2px 10px; font-size: 14px; font-weight: 700; margin-left: 8px; vertical-align: middle;}
+
+.stats {display:grid; grid-template-columns: repeat(auto-fit, minmax(150px,1fr)); gap: 12px; margin-bottom: 18px;}
+.stat {background: rgba(128,128,128,.07); border-radius: 14px; padding: 14px 16px;}
+.stat .l {font-size: 12px; opacity: .6; text-transform: uppercase; letter-spacing: .05em;}
+.stat .v {font-size: 22px; font-weight: 700; margin-top: 4px;}
+
+.notabox {display:flex; align-items:center; gap: 26px; flex-wrap: wrap; border-radius: 18px;
+  padding: 20px 24px; background: rgba(128,128,128,.07); margin-bottom: 20px;
+  border: 1px solid rgba(128,128,128,.15);}
+.anillo {position: relative; width: 120px; height: 120px; flex-shrink: 0;}
+.anillo .ring {position:absolute; inset:0; border-radius:50%;
+  background: conic-gradient(var(--c) calc(var(--p) * 1%), rgba(128,128,128,.18) 0);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 13px), #000 calc(100% - 12px));
+          mask: radial-gradient(farthest-side, transparent calc(100% - 13px), #000 calc(100% - 12px));}
+.anillo .n {position:absolute; inset:0; display:flex; flex-direction:column; align-items:center;
+  justify-content:center; font-size: 34px; font-weight: 800; color: var(--c); line-height: 1;}
+.anillo .n small {font-size: 12px; opacity: .6; font-weight: 600; margin-top: 4px; color: inherit;}
+.notabox .et {font-size: 22px; font-weight: 800; color: var(--c);}
+.notabox .ex {opacity: .7; font-size: 14px; margin-top: 6px; max-width: 620px;}
+
+.tarjeta {background: rgba(128,128,128,.07); border-radius: 16px; padding: 18px 18px 16px;
+  border: 1px solid rgba(128,128,128,.14); border-top: 5px solid var(--c);
+  margin-bottom: 16px; min-height: 270px; transition: transform .15s, box-shadow .15s;}
+.tarjeta:hover {transform: translateY(-2px); box-shadow: 0 8px 22px rgba(0,0,0,.08);}
 .tarjeta .top {display:flex; justify-content:space-between; align-items:center; gap:8px;}
-.tarjeta .rank {font-size: 12px; opacity: .6; text-transform: uppercase; letter-spacing: .05em;}
-.tarjeta .nombre {font-size: 16px; font-weight: 600; margin: 4px 0 6px;}
-.tarjeta .valor {font-size: 30px; font-weight: 700; line-height: 1.1;}
-.badge {background: var(--c); color: #fff; border-radius: 999px; padding: 3px 12px;
-  font-size: 13px; font-weight: 600; white-space: nowrap;}
-.frase {font-size: 14px; margin-top: 8px;}
-.escala {font-size: 12px; opacity: .65; margin-top: 10px;}
-.nota {border-radius: 16px; padding: 18px 22px; background: rgba(128,128,128,0.07);
-  border: 2px solid var(--c); margin: 8px 0 18px;}
-.nota .num {font-size: 46px; font-weight: 800; color: var(--c); line-height: 1;}
-.chip {display:inline-block; border-radius: 999px; padding: 5px 13px; margin: 4px 6px 4px 0;
-  font-size: 13px; font-weight: 500; background: var(--c); color: #fff;}
+.tarjeta .rank {font-size: 11px; opacity: .55; text-transform: uppercase; letter-spacing: .06em; font-weight: 600;}
+.tarjeta .nombre {font-size: 15px; font-weight: 600; margin: 8px 0 4px;}
+.tarjeta .valor {font-size: 32px; font-weight: 800; line-height: 1.1;}
+.badge {background: var(--c); color: #fff; border-radius: 999px; padding: 4px 12px;
+  font-size: 12px; font-weight: 700; white-space: nowrap;}
+.barra {height: 7px; border-radius: 99px; background: rgba(128,128,128,.18); margin: 12px 0 4px; overflow: hidden;}
+.barra div {height: 100%; border-radius: 99px; background: var(--c);}
+.frase {font-size: 14px; margin-top: 10px; line-height: 1.45;}
+.escala {font-size: 11.5px; opacity: .6; margin-top: 10px; line-height: 1.4;}
+
+.seccion {font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+  opacity: .6; margin: 10px 0 8px;}
+.chip {display:inline-block; border-radius: 999px; padding: 6px 14px; margin: 4px 6px 4px 0;
+  font-size: 13px; font-weight: 600; color: var(--c); background: color-mix(in srgb, var(--c) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--c) 35%, transparent);}
+
+.tabla {width:100%; border-collapse: separate; border-spacing: 0 6px; font-size: 14px;}
+.tabla th {text-align:left; font-size: 11.5px; text-transform: uppercase; letter-spacing: .05em;
+  opacity: .6; font-weight: 600; padding: 4px 10px;}
+.tabla td {background: rgba(128,128,128,.07); padding: 10px;}
+.tabla td:first-child {border-radius: 10px 0 0 10px; font-weight: 700;}
+.tabla td:last-child {border-radius: 0 10px 10px 0;}
+.pill {display:inline-block; border-radius: 999px; padding: 3px 10px; font-size: 12px; font-weight: 700;
+  color: #fff; background: var(--c); white-space: nowrap;}
+.tabla-wrap {overflow-x: auto; margin-bottom: 18px;}
 </style>""",
     unsafe_allow_html=True,
 )
@@ -108,7 +167,7 @@ def sin_dato(base):
 # Los 6 indicadores, en orden de importancia
 # ---------------------------------------------------------------------------
 def m_margen(info):
-    base = {"nombre": "Rentabilidad (margen neto)", "peso": 20,
+    base = {"nombre": "Rentabilidad (margen neto)", "icono": "💰", "corto": "Rentabilidad", "peso": 20,
             "escala": "Negativo: malo · 0-5%: flojo · 5-10%: aceptable · 10-20%: bueno · "
                       "20-30%: muy bueno · +30%: excelente"}
     v = num(info.get("profitMargins"))
@@ -125,7 +184,7 @@ def m_margen(info):
 
 
 def m_crecimiento(info):
-    base = {"nombre": "Crecimiento de ventas", "peso": 20,
+    base = {"nombre": "Crecimiento de ventas", "icono": "📈", "corto": "Crecimiento", "peso": 20,
             "escala": "Negativo: malo · 0-5%: flojo · 5-10%: aceptable · 10-20%: bueno · "
                       "20-40%: muy bueno · +40%: excelente"}
     v = num(info.get("revenueGrowth"))
@@ -142,7 +201,7 @@ def m_crecimiento(info):
 
 
 def m_valuacion(info):
-    base = {"nombre": "Valuación (PER)", "peso": 20,
+    base = {"nombre": "Valuación (PER)", "icono": "🏷️", "corto": "Valuación", "peso": 20,
             "escala": "-10x: muy barato (ojo trampas) · 10-15x: barato · 15-22x: razonable · "
                       "22-30x: exigente · 30-45x: caro · +45x: muy caro. Tech suele cotizar más caro."}
     forward = num(info.get("forwardPE"))
@@ -165,7 +224,7 @@ def m_valuacion(info):
 
 
 def m_deuda(info):
-    base = {"nombre": "Deuda / Patrimonio", "peso": 15,
+    base = {"nombre": "Deuda / Patrimonio", "icono": "🏦", "corto": "Deuda", "peso": 15,
             "escala": "-0,3x: excelente · 0,3-0,7x: muy bueno · 0,7-1,2x: bueno · "
                       "1,2-2x: aceptable · 2-3x: flojo · +3x: alto. Con tasas altas pesa más."}
     if info.get("sector") in SECTORES_FINANCIEROS:
@@ -188,7 +247,7 @@ def m_deuda(info):
 
 
 def m_roe(info):
-    base = {"nombre": "ROE (retorno sobre capital)", "peso": 15,
+    base = {"nombre": "ROE (retorno sobre capital)", "icono": "⚙️", "corto": "ROE", "peso": 15,
             "escala": "Negativo: malo · 0-8%: flojo · 8-15%: aceptable · 15-20%: bueno · "
                       "20-30%: muy bueno · +30%: excelente. Arriba de 60% suele ser engañoso."}
     v = num(info.get("returnOnEquity"))
@@ -206,7 +265,7 @@ def m_roe(info):
 
 
 def m_dividendo(info, precio):
-    base = {"nombre": "Dividendo", "peso": 10,
+    base = {"nombre": "Dividendo", "icono": "💵", "corto": "Dividendo", "peso": 10,
             "escala": "Se evalúa el payout (qué parte de la ganancia reparte): -50%: muy "
                       "sostenible · 50-70%: sostenible · 70-90%: ajustado · +90%: en riesgo"}
     rate = num(info.get("dividendRate"))
@@ -270,20 +329,52 @@ def chequeos(info, reverse_splits, dilucion):
 # ---------------------------------------------------------------------------
 # Datos
 # ---------------------------------------------------------------------------
+def con_reintentos(fn, intentos=3):
+    """Reintenta ante cortes o limites de consultas de Yahoo."""
+    ultimo = None
+    for i in range(intentos):
+        try:
+            return fn()
+        except Exception as e:
+            ultimo = e
+            time.sleep(1.5 * (i + 1))
+    raise ultimo
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def traer_datos(ticker):
-    """Lanza excepcion si falla (asi los errores no quedan cacheados)."""
+    """Lanza excepcion si no consigue ni el precio (asi los errores no quedan cacheados)."""
     tk = yf.Ticker(ticker)
-    info = dict(tk.info or {})
-    precio = num(info.get("currentPrice")) or num(info.get("regularMarketPrice"))
-    if precio is None:
-        raise ValueError("Sin datos. Revisá el ticker (usá el de EE.UU., no el .BA).")
+
+    info, detalle = {}, ""
+    try:
+        info = dict(con_reintentos(lambda: tk.info) or {})
+    except Exception as e:
+        detalle = f"{type(e).__name__}: {e}"
 
     try:
-        hist = tk.history(period="1y")["Close"]
+        hist = con_reintentos(lambda: tk.history(period="1y"))["Close"]
         hist.index = hist.index.tz_localize(None)
     except Exception:
         hist = pd.Series(dtype=float)
+
+    precio = num(info.get("currentPrice")) or num(info.get("regularMarketPrice"))
+    if precio is None:
+        try:
+            precio = num(tk.fast_info["lastPrice"])
+        except Exception:
+            precio = None
+    if precio is None and len(hist):
+        precio = float(hist.iloc[-1])
+    if precio is None:
+        raise ValueError(
+            "Yahoo no devolvió datos. Puede ser el ticker (usá el de EE.UU., no el .BA) "
+            "o un límite de consultas de Yahoo: probá de nuevo en unos minutos."
+            + (f" Detalle técnico: {detalle}" if detalle else "")
+        )
+
+    parcial = not any(info.get(k) is not None for k in
+                      ("profitMargins", "revenueGrowth", "forwardPE", "trailingPE"))
 
     try:
         s = tk.splits
@@ -305,12 +396,12 @@ def traer_datos(ticker):
     except Exception:
         dilucion = None
 
-    return info, precio, hist, reverse, dilucion
+    return info, precio, hist, reverse, dilucion, parcial
 
 
 def analizar(ticker):
     try:
-        info, precio, hist, reverse, dilucion = traer_datos(ticker)
+        info, precio, hist, reverse, dilucion, parcial = traer_datos(ticker)
     except Exception as e:
         return {"ticker": ticker, "error": str(e)}
 
@@ -329,70 +420,125 @@ def analizar(ticker):
 
     return {"ticker": ticker, "error": None, "info": info, "precio": precio, "hist": hist,
             "metricas": metricas, "nota": nota, "n_validas": len(validas),
-            "penalizacion": penalizacion, "chips": chips}
+            "penalizacion": penalizacion, "chips": chips, "parcial": parcial}
 
 
 def calificacion_global(nota):
     if nota is None:
         return "Sin datos suficientes", GRIS
-    return escalon(nota, [(3.5, "Fundamentos muy débiles", 0, ROJO),
-                          (5, "Fundamentos débiles", 0, NARANJA),
-                          (6.5, "Fundamentos mixtos", 0, AMARILLO),
-                          (8, "Buenos fundamentos", 0, VERDE),
-                          (INF, "Fundamentos sólidos", 0, VERDE_OSC)])[0::2]
+    etiqueta, _, color = escalon(nota, [(3.5, "Fundamentos muy débiles", 0, ROJO),
+                                        (5, "Fundamentos débiles", 0, NARANJA),
+                                        (6.5, "Fundamentos mixtos", 0, AMARILLO),
+                                        (8, "Buenos fundamentos", 0, VERDE),
+                                        (INF, "Fundamentos sólidos", 0, VERDE_OSC)])
+    return etiqueta, color
 
 
 # ---------------------------------------------------------------------------
 # Render
 # ---------------------------------------------------------------------------
+def e(x):
+    return html.escape(str(x))
+
+
 def html_tarjeta(m, rank):
+    barra = ""
+    if m["puntos"] is not None:
+        barra = f'<div class="barra"><div style="width:{m["puntos"] * 10:.0f}%"></div></div>'
     return (
         f'<div class="tarjeta" style="--c:{m["color"]}">'
-        f'<div class="top"><span class="rank">#{rank} de 6 en importancia</span>'
-        f'<span class="badge">{html.escape(m["etiqueta"])}</span></div>'
-        f'<div class="nombre">{html.escape(m["nombre"])}</div>'
-        f'<div class="valor">{html.escape(m["valor"])}</div>'
-        f'<div class="frase">{html.escape(m["frase"])}</div>'
-        f'<div class="escala">Escala: {html.escape(m["escala"])}</div>'
+        f'<div class="top"><span class="rank">#{rank} en importancia</span>'
+        f'<span class="badge">{e(m["etiqueta"])}</span></div>'
+        f'<div class="nombre">{m["icono"]} {e(m["nombre"])}</div>'
+        f'<div class="valor">{e(m["valor"])}</div>'
+        f"{barra}"
+        f'<div class="frase">{e(m["frase"])}</div>'
+        f'<div class="escala">{e(m["escala"])}</div>'
         f"</div>"
     )
 
 
-def mostrar(r):
-    if r["error"]:
-        st.error(f"{r['ticker']}: {r['error']}")
-        return
-
-    info, hist = r["info"], r["hist"]
-    nombre = info.get("shortName") or r["ticker"]
-    st.subheader(f"{nombre} ({r['ticker']})")
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Precio", f"USD {fmt_num(r['precio'], 2)}")
-    mcap = num(info.get("marketCap"))
-    c2.metric("Tamaño (market cap)",
-              f"USD {fmt_num(mcap / 1e9, 1)} mil MM" if mcap else "s/d")
-    if len(hist) > 1:
-        var = hist.iloc[-1] / hist.iloc[0] - 1
-        c3.metric("Último año", fmt_pct(var))
-    else:
-        c3.metric("Último año", "s/d")
-    c4.metric("Sector", info.get("sector") or "s/d")
-
+def html_nota(r):
     etiqueta, color = calificacion_global(r["nota"])
-    nota_txt = fmt_num(r["nota"]) if r["nota"] is not None else "—"
-    castigo = (f", con {fmt_num(r['penalizacion'])} puntos menos por los chequeos de riesgo"
+    if r["nota"] is None:
+        n, p = "—", 0
+    else:
+        n, p = fmt_num(r["nota"]), r["nota"] * 10
+    castigo = (f" Incluye {fmt_num(r['penalizacion'])} puntos menos por los chequeos de riesgo."
                if r["penalizacion"] else "")
-    st.markdown(
-        f'<div class="nota" style="--c:{color}"><div style="display:flex;align-items:center;'
-        f'gap:22px;flex-wrap:wrap"><div class="num">{nota_txt}</div><div>'
-        f'<div style="font-size:20px;font-weight:700">{etiqueta}</div>'
-        f'<div style="opacity:.7;font-size:14px">Nota ponderada de 0 a 10 sobre '
-        f'{r["n_validas"]} de 6 indicadores{castigo}. Resume los números: no dice si comprar.</div>'
-        f"</div></div></div>",
-        unsafe_allow_html=True,
+    return (
+        f'<div class="notabox" style="--c:{color};--p:{p:.0f}">'
+        f'<div class="anillo"><div class="ring"></div><div class="n">{n}<small>de 10</small></div></div>'
+        f'<div><div class="et">{e(etiqueta)}</div>'
+        f'<div class="ex">Nota ponderada sobre {r["n_validas"]} de 6 indicadores.{castigo} '
+        f"Resume los números: no dice si comprar.</div></div></div>"
     )
 
+
+def html_empresa(r):
+    info, hist = r["info"], r["hist"]
+    nombre = info.get("shortName") or info.get("longName") or r["ticker"]
+    sector = info.get("sector") or "Sector s/d"
+    industria = info.get("industry")
+    sub = sector + (f" · {industria}" if industria else "")
+
+    mcap = num(info.get("marketCap"))
+    mcap_txt = f"USD {fmt_num(mcap / 1e9, 1)} mil MM" if mcap else "s/d"
+    if len(hist) > 1:
+        var = hist.iloc[-1] / hist.iloc[0] - 1
+        color_var = VERDE if var >= 0 else ROJO
+        signo = "+" if var >= 0 else ""
+        var_txt = f'<span style="color:{color_var}">{signo}{fmt_pct(var)}</span>'
+    else:
+        var_txt = "s/d"
+    maximo = num(info.get("fiftyTwoWeekHigh"))
+    desde_max = (f"{fmt_pct(r['precio'] / maximo - 1)}" if maximo else "s/d")
+
+    stats = [("Precio", f"USD {fmt_num(r['precio'], 2)}"), ("Tamaño", mcap_txt),
+             ("Último año", var_txt), ("Desde el máximo", desde_max)]
+    grid = "".join(f'<div class="stat"><div class="l">{l}</div><div class="v">{v}</div></div>'
+                   for l, v in stats)
+    return (
+        f'<div class="empresa"><div><div class="titulo">{e(nombre)}'
+        f'<span class="tick">{e(r["ticker"])}</span></div>'
+        f'<div class="sub">{e(sub)}</div></div></div>'
+        f'<div class="stats">{grid}</div>'
+    )
+
+
+def html_comparativa(resultados):
+    validos = [r for r in resultados if not r["error"]]
+    if len(validos) < 2:
+        return ""
+    validos.sort(key=lambda r: -1 if r["nota"] is None else r["nota"], reverse=True)
+    cortos = [m["corto"] for m in validos[0]["metricas"]]
+    cab = "<tr><th>Ticker</th><th>Nota</th>" + "".join(f"<th>{c}</th>" for c in cortos) + "</tr>"
+    filas = ""
+    for r in validos:
+        _, color = calificacion_global(r["nota"])
+        n = fmt_num(r["nota"]) if r["nota"] is not None else "—"
+        celdas = "".join(
+            f'<td><span class="pill" style="--c:{m["color"]}">{e(m["etiqueta"])}</span></td>'
+            for m in r["metricas"])
+        filas += (f'<tr><td>{e(r["ticker"])}</td>'
+                  f'<td><span class="pill" style="--c:{color}">{n}</span></td>{celdas}</tr>')
+    return (f'<div class="seccion">Comparativa (ordenada por nota)</div>'
+            f'<div class="tabla-wrap"><table class="tabla">{cab}{filas}</table></div>')
+
+
+def mostrar(r):
+    if r["error"]:
+        st.error(f"**{r['ticker']}** — {r['error']}")
+        return
+
+    st.markdown(html_empresa(r), unsafe_allow_html=True)
+    if r["parcial"]:
+        st.warning("Yahoo devolvió el precio pero no los datos de balance (suele ser un límite "
+                   "de consultas). Probá de nuevo en unos minutos.")
+    st.markdown(html_nota(r), unsafe_allow_html=True)
+
+    st.markdown('<div class="seccion">Indicadores, de más a menos importante</div>',
+                unsafe_allow_html=True)
     for fila in range(2):
         cols = st.columns(3)
         for j in range(3):
@@ -400,49 +546,33 @@ def mostrar(r):
             with cols[j]:
                 st.markdown(html_tarjeta(r["metricas"][i], i + 1), unsafe_allow_html=True)
 
-    st.markdown("**Chequeos de riesgo**")
-    st.markdown(
-        "".join(f'<span class="chip" style="--c:{c}">{html.escape(t)}</span>'
-                for t, c in r["chips"]),
-        unsafe_allow_html=True,
-    )
+    st.markdown('<div class="seccion">Chequeos de riesgo</div>', unsafe_allow_html=True)
+    st.markdown("".join(f'<span class="chip" style="--c:{c}">{e(t)}</span>'
+                        for t, c in r["chips"]), unsafe_allow_html=True)
 
-    if len(hist) > 1:
-        st.markdown("**Precio del último año (USD)**")
-        st.line_chart(hist, height=240)
-
-
-def excel(resultados):
-    filas = []
-    for r in resultados:
-        if r["error"]:
-            filas.append({"Ticker": r["ticker"], "Error": r["error"]})
-            continue
-        etiqueta, _ = calificacion_global(r["nota"])
-        fila = {"Ticker": r["ticker"], "Nombre": r["info"].get("shortName"),
-                "Precio USD": r["precio"],
-                "Nota (0-10)": round(r["nota"], 1) if r["nota"] is not None else None,
-                "Calificación": etiqueta}
-        for m in r["metricas"]:
-            fila[m["nombre"]] = m["valor"]
-            fila[m["nombre"] + " - evaluación"] = m["etiqueta"]
-        fila["Chequeos de riesgo"] = " | ".join(t for t, _ in r["chips"])
-        filas.append(fila)
-    buffer = io.BytesIO()
-    with pd.ExcelWriter(buffer, engine="openpyxl") as w:
-        pd.DataFrame(filas).to_excel(w, index=False, sheet_name="Analisis")
-    return buffer.getvalue()
+    if len(r["hist"]) > 1:
+        st.markdown('<div class="seccion" style="margin-top:22px">Precio del último año (USD)</div>',
+                    unsafe_allow_html=True)
+        st.area_chart(r["hist"], height=240, color="#7c3aed")
 
 
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
-st.title("📊 Analizador de acciones")
-st.caption("Escribí uno o más tickers de EE.UU. separados por coma (MELI, no MELI.BA). "
-           "Datos de Yahoo Finance: orientativos, verificá antes de decidir.")
+st.markdown(
+    '<div class="hero"><h1>📊 Analizador de acciones</h1>'
+    "<p>Escribí uno o más tickers de EE.UU. separados por coma (MELI, no MELI.BA). "
+    "Datos de Yahoo Finance: orientativos, verificá antes de decidir.</p></div>",
+    unsafe_allow_html=True,
+)
 
-entrada = st.text_input("Tickers", placeholder="Ej: MELI, NU, CLX")
-if st.button("Analizar", type="primary") and entrada.strip():
+with st.form("buscar", border=False):
+    c1, c2 = st.columns([5, 1], vertical_alignment="bottom")
+    entrada = c1.text_input("Tickers", placeholder="Ej: MELI, NU, CLX",
+                            label_visibility="collapsed")
+    enviar = c2.form_submit_button("Analizar")
+
+if enviar and entrada.strip():
     vistos, tickers = set(), []
     for t in entrada.replace(";", ",").replace(" ", ",").split(","):
         t = t.strip().upper().replace("$", "")
@@ -453,6 +583,23 @@ if st.button("Analizar", type="primary") and entrada.strip():
 
 tickers = st.session_state.get("tickers", [])
 
+if tickers:
+    resultados = []
+    with st.spinner("Buscando datos en Yahoo Finance..."):
+        for t in tickers:
+            resultados.append(analizar(t))
+
+    comparativa = html_comparativa(resultados)
+    if comparativa:
+        st.markdown(comparativa, unsafe_allow_html=True)
+
+    if len(resultados) == 1:
+        mostrar(resultados[0])
+    else:
+        for tab, r in zip(st.tabs([r["ticker"] for r in resultados]), resultados):
+            with tab:
+                mostrar(r)
+
 with st.expander("¿Por qué este orden de importancia?"):
     st.markdown(
         "1. **Rentabilidad** — si no gana plata, todo lo demás es promesa.\n"
@@ -462,21 +609,3 @@ with st.expander("¿Por qué este orden de importancia?"):
         "5. **ROE** — útil, pero se infla con recompras y deuda.\n"
         "6. **Dividendo** — solo importa si buscás renta; si no paga, no resta."
     )
-
-if tickers:
-    resultados = []
-    with st.spinner("Buscando datos en Yahoo Finance..."):
-        for t in tickers:
-            resultados.append(analizar(t))
-
-    if len(resultados) == 1:
-        mostrar(resultados[0])
-    else:
-        for tab, r in zip(st.tabs([r["ticker"] for r in resultados]), resultados):
-            with tab:
-                mostrar(r)
-
-    st.divider()
-    st.download_button("⬇️ Descargar Excel", data=excel(resultados),
-                       file_name=f"analisis_{datetime.now():%Y%m%d}.xlsx",
-                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
