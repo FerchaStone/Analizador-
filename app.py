@@ -16,7 +16,7 @@ import html
 import json
 import time
 import urllib.request
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 import streamlit as st
@@ -427,9 +427,27 @@ def traer_datos(ticker):
     return info, precio, hist, reverse, dilucion, parcial
 
 
+ARGENTINA = timezone(timedelta(hours=-3))
+
+
+def hora_arg(texto):
+    """Convierte la fecha ISO de DolarApi a hora argentina legible."""
+    try:
+        dt = datetime.fromisoformat(str(texto).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.astimezone(ARGENTINA)
+        hoy = datetime.now(ARGENTINA).date()
+        if dt.date() == hoy:
+            return f"hoy {dt:%H:%M}"
+        return f"{dt:%d/%m %H:%M}"
+    except Exception:
+        return None
+
+
 @st.cache_data(ttl=600, show_spinner=False)
 def dolar(tipo):
-    """Cotizacion de venta desde DolarApi. tipo: 'contadoconliqui' o 'bolsa' (MEP)."""
+    """(venta, hora de actualizacion) desde DolarApi. tipo: 'contadoconliqui' o 'bolsa' (MEP)."""
     for url in (f"https://dolarapi.com/v1/dolares/{tipo}",
                 f"https://dolarapi.com/v1/ambito/dolares/{tipo}"):
         try:
@@ -438,10 +456,10 @@ def dolar(tipo):
                 d = json.loads(resp.read().decode())
             v = num(d.get("venta"))
             if v:
-                return v
+                return v, hora_arg(d.get("fechaActualizacion"))
         except Exception:
             continue
-    return None
+    return None, None
 
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -469,13 +487,17 @@ def precio_cedear(ticker):
 
 
 def contexto_mercado():
-    ccl, mep = dolar("contadoconliqui"), dolar("bolsa")
+    ccl, ccl_hora = dolar("contadoconliqui")
+    mep, mep_hora = dolar("bolsa")
     try:
         tnx = serie("^TNX", "5d")
-        tasa, cambio = float(tnx.iloc[-1]), float(tnx.iloc[-1] - tnx.iloc[-2]) if len(tnx) > 1 else None
+        tasa = float(tnx.iloc[-1])
+        cambio = float(tnx.iloc[-1] - tnx.iloc[-2]) if len(tnx) > 1 else None
+        tasa_fecha = tnx.index[-1].strftime("%d/%m")
     except Exception:
-        tasa, cambio = None, None
-    return ccl, mep, tasa, cambio
+        tasa, cambio, tasa_fecha = None, None, None
+    return {"ccl": ccl, "ccl_hora": ccl_hora, "mep": mep, "mep_hora": mep_hora,
+            "tasa": tasa, "cambio": cambio, "tasa_fecha": tasa_fecha}
 
 
 def analizar(ticker):
@@ -672,7 +694,7 @@ def bloque_cedear(r):
     h = r["hist"]
     precio_usa = float(h.iloc[-1]) if len(h) else r["precio"]
     fecha_usa = h.index[-1].strftime("%d/%m/%Y") if len(h) else "hoy"
-    ccl = dolar("contadoconliqui")
+    ccl, ccl_hora = dolar("contadoconliqui")
 
     base = (f'<div class="fila"><div>CEDEAR en BYMA<b>$ {fmt_num(c["precio"], 2)}</b>'
             f'cierre {c["fecha"]}</div><div>Acción en EE.UU.<b>USD {fmt_num(precio_usa, 2)}</b>'
@@ -685,7 +707,8 @@ def bloque_cedear(r):
         return
 
     implicito = c["precio"] * ratio / precio_usa
-    fila_ccl = f'<div>CCL del mercado<b>$ {fmt_num(ccl, 2)}</b>DolarApi</div>' if ccl else ""
+    fila_ccl = (f'<div>CCL del mercado<b>$ {fmt_num(ccl, 2)}</b>'
+                f'DolarApi{" · " + ccl_hora if ccl_hora else ""}</div>' if ccl else "")
     fila_imp = f'<div>Dólar implícito<b>$ {fmt_num(implicito, 2)}</b>precio × ratio / precio EE.UU.</div>'
 
     if not ccl:
@@ -753,20 +776,38 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-ccl, mep, tasa, cambio_tasa = contexto_mercado()
-tasa_det = (f"{'+' if cambio_tasa >= 0 else ''}{fmt_num(cambio_tasa, 2)} pp en el día"
-            if cambio_tasa is not None else "")
+col_franja, col_boton = st.columns([6, 1], vertical_alignment="center")
+with col_boton:
+    if st.button("🔄 Actualizar", use_container_width=True,
+                 help="Vuelve a pedir todos los datos: dólar, tasa y acciones."):
+        st.cache_data.clear()
+
+ctx = contexto_mercado()
+
+
+def detalle(uso, hora):
+    return f"{uso} · {hora}" if hora else f"{uso} · hora s/d"
+
+
+tasa_det = ""
+if ctx["cambio"] is not None:
+    signo = "+" if ctx["cambio"] >= 0 else ""
+    tasa_det = f"{signo}{fmt_num(ctx['cambio'], 2)} pp · cierre {ctx['tasa_fecha']}"
 franja = [
-    ("Dólar CCL", f"$ {fmt_num(ccl, 2)}" if ccl else "s/d", "Para comprar CEDEARs"),
-    ("Dólar MEP", f"$ {fmt_num(mep, 2)}" if mep else "s/d", "Para dolarizar pesos"),
-    ("Treasury 10 años", f"{fmt_num(tasa, 2)}%" if tasa is not None else "s/d", tasa_det),
+    ("Dólar CCL", f"$ {fmt_num(ctx['ccl'], 2)}" if ctx["ccl"] else "s/d",
+     detalle("Para CEDEARs", ctx["ccl_hora"])),
+    ("Dólar MEP", f"$ {fmt_num(ctx['mep'], 2)}" if ctx["mep"] else "s/d",
+     detalle("Para dolarizar", ctx["mep_hora"])),
+    ("Treasury 10 años", f"{fmt_num(ctx['tasa'], 2)}%" if ctx["tasa"] is not None else "s/d",
+     tasa_det),
 ]
-st.markdown(
-    '<div class="franja">' + "".join(
-        f'<div class="stat"><div class="l">{l}</div><div class="v">{v}</div><div class="d">{d}</div></div>'
-        for l, v, d in franja) + "</div>",
-    unsafe_allow_html=True,
-)
+with col_franja:
+    st.markdown(
+        '<div class="franja">' + "".join(
+            f'<div class="stat"><div class="l">{l}</div><div class="v">{v}</div>'
+            f'<div class="d">{d}</div></div>' for l, v, d in franja) + "</div>",
+        unsafe_allow_html=True,
+    )
 
 with st.form("buscar", border=False):
     c1, c2 = st.columns([4, 1], vertical_alignment="bottom")
