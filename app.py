@@ -13,10 +13,12 @@ Datos: Yahoo Finance via yfinance. Son orientativos: verificar antes de decidir.
 """
 
 import html
+import io
 import json
+import re
 import time
 import urllib.request
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time as dtime, timedelta, timezone
 
 import pandas as pd
 import streamlit as st
@@ -24,11 +26,13 @@ import yfinance as yf
 
 st.set_page_config(page_title="Analizador de acciones", page_icon="📊", layout="wide")
 
-# Ratios de CEDEAR que quieras dejar guardados (cuantos CEDEARs = 1 accion).
-# Sacalos del detalle del CEDEAR en tu broker o del listado oficial de Comafi, y
-# revisalos si hay un split. Ejemplo de formato: RATIOS = {"MELI": 120, "NU": 2}
-# (esos numeros son solo un ejemplo de formato, no datos reales).
+# Los ratios de CEDEAR se bajan solos del listado oficial de Comafi (una vez por dia).
+# Solo hace falta cargar aca los que Comafi no publica (por ejemplo, CEDEARs emitidos
+# por Caja de Valores) o si queres forzar uno. Formato: RATIOS = {"GLD": 50}
+# (ese numero es solo un ejemplo de formato, no un dato real).
 RATIOS = {}
+
+COMAFI_PAGINA = "https://www.comafi.com.ar/custodiaglobal/programas.aspx"
 
 # ---------------------------------------------------------------------------
 # Estilo
@@ -462,6 +466,89 @@ def dolar(tipo):
     return None, None
 
 
+def bajar(url, timeout=15):
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read()
+
+
+def leer_ratio(v):
+    """Convierte '120:1', 120 o una celda que Excel tomo como hora (3:1 -> 03:01) en numero."""
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return None
+    if isinstance(v, datetime):
+        v = v.time()
+    if isinstance(v, dtime):
+        return v.hour / v.minute if v.minute else None
+    if isinstance(v, timedelta):
+        horas, resto = divmod(int(v.total_seconds()), 3600)
+        minutos = resto // 60
+        return horas / minutos if minutos else None
+    if isinstance(v, (int, float)):
+        return float(v) if v > 0 else None
+    m = re.match(r"\s*([\d.,]+)\s*:\s*([\d.,]+)", str(v))
+    if m:
+        a = float(m.group(1).replace(",", "."))
+        b = float(m.group(2).replace(",", "."))
+        return a / b if b else None
+    return None
+
+
+def ratios_de_planilla(contenido):
+    ratios = {}
+    hojas = pd.read_excel(io.BytesIO(contenido), sheet_name=None, header=None)
+    for df in hojas.values():
+        fila_titulo, col_tick, col_ratio = None, None, None
+        for i in range(min(len(df), 40)):
+            celdas = [str(x) for x in df.iloc[i].tolist()]
+            ct = next((j for j, c in enumerate(celdas) if "Identificaci" in c), None)
+            cr = next((j for j, c in enumerate(celdas) if "Ratio" in c), None)
+            if ct is not None and cr is not None:
+                fila_titulo, col_tick, col_ratio = i, ct, cr
+                break
+        if fila_titulo is None:
+            continue
+        for i in range(fila_titulo + 1, len(df)):
+            tick = df.iat[i, col_tick]
+            ratio = leer_ratio(df.iat[i, col_ratio])
+            if isinstance(tick, str) and tick.strip() and ratio:
+                ratios[tick.strip().upper()] = ratio
+    return ratios
+
+
+@st.cache_data(ttl=24 * 3600, show_spinner=False)
+def ratios_comafi():
+    """Ratios oficiales de Comafi. Lanza excepcion si falla (no queda cacheado)."""
+    pagina = bajar(COMAFI_PAGINA).decode("utf-8", "ignore")
+    links = re.findall(r'["\']([^"\']*Multimedios/otros/\d+\.xlsx[^"\']*)["\']', pagina)
+    ratios = {}
+    for link in dict.fromkeys(l.replace("&amp;", "&") for l in links):
+        url = link if link.startswith("http") else "https://www.comafi.com.ar" + (
+            link if link.startswith("/") else "/custodiaglobal/" + link)
+        try:
+            ratios.update(ratios_de_planilla(bajar(url)))
+        except Exception:
+            continue
+    if not ratios:
+        raise ValueError("No se pudieron leer los ratios de Comafi")
+    return {"ratios": ratios, "fecha": datetime.now(timezone(timedelta(hours=-3))).strftime("%d/%m")}
+
+
+def ratio_oficial(ticker):
+    """(ratio, origen) buscando primero en RATIOS y despues en Comafi."""
+    for t in (ticker, ticker.replace("-", ""), ticker.replace("-", ".")):
+        if t in RATIOS:
+            return float(RATIOS[t]), "cargado por vos en el código"
+    try:
+        datos = ratios_comafi()
+    except Exception:
+        return None, None
+    for t in (ticker, ticker.replace("-", ""), ticker.replace("-", ".")):
+        if t in datos["ratios"]:
+            return datos["ratios"][t], f"el listado oficial de Comafi, bajado el {datos['fecha']}"
+    return None, None
+
+
 @st.cache_data(ttl=600, show_spinner=False)
 def serie(simbolo, periodo="1y"):
     """Serie de cierres. Lanza excepcion si falla (no queda cacheada)."""
@@ -685,16 +772,26 @@ def bloque_cedear(r):
                    "tenga otro ticker en BYMA o que Yahoo no lo cubra.")
         return
 
-    ratio = st.number_input(
-        f"Ratio del CEDEAR de {t} (cuántos CEDEARs = 1 acción)",
-        min_value=0.0, value=float(RATIOS.get(t, 0)), step=1.0, key=f"ratio_{t}",
-        help="Lo ves en el detalle del CEDEAR en Balanz o en el listado de Comafi. "
-             "Si figura 20:1, poné 20. Ojo que cambia con los splits.")
-
     h = r["hist"]
     precio_usa = float(h.iloc[-1]) if len(h) else r["precio"]
     fecha_usa = h.index[-1].strftime("%d/%m/%Y") if len(h) else "hoy"
     ccl, ccl_hora = dolar("contadoconliqui")
+
+    oficial, origen = ratio_oficial(t)
+    ratio = st.number_input(
+        f"Ratio del CEDEAR de {t} (cuántos CEDEARs = 1 acción)",
+        min_value=0.0, value=float(oficial or 0), step=1.0, key=f"ratio_{t}",
+        help="Se completa solo con el listado oficial de Comafi. Si lo cambiás a mano, "
+             "se usa el tuyo. Si figura 20:1, es 20.")
+    if oficial and ratio == oficial:
+        st.caption(f"Ratio {fmt_num(oficial, 0 if oficial == int(oficial) else 2)}:1 según {origen}.")
+    elif oficial:
+        st.caption(f"Estás usando un ratio cargado a mano. El oficial es "
+                   f"{fmt_num(oficial, 0 if oficial == int(oficial) else 2)}:1 ({origen}).")
+    elif ccl:
+        pista = round(precio_usa * ccl / c["precio"])
+        st.caption(f"No encontré el ratio oficial. Por los precios, parece ser {pista}:1 "
+                   "(deducido, no oficial): confirmalo en tu broker antes de cargarlo.")
 
     base = (f'<div class="fila"><div>CEDEAR en BYMA<b>$ {fmt_num(c["precio"], 2)}</b>'
             f'cierre {c["fecha"]}</div><div>Acción en EE.UU.<b>USD {fmt_num(precio_usa, 2)}</b>'
