@@ -32,25 +32,24 @@ html, body, [class*="css"], .stMarkdown, .stTextInput, button {font-family: 'Int
 #MainMenu, footer, [data-testid="stToolbar"], [data-testid="stDecoration"] {visibility: hidden;}
 .block-container {padding-top: 1.5rem; max-width: 1180px;}
 
-.hero {background: linear-gradient(135deg, #312e81 0%, #6d28d9 55%, #db2777 100%);
-  border-radius: 20px; padding: 28px 32px; color: #fff; margin-bottom: 18px;
-  box-shadow: 0 10px 30px rgba(109,40,217,.25);}
+.hero {background: linear-gradient(135deg, #1f2937 0%, #334155 100%);
+  border-radius: 18px; padding: 26px 30px; color: #fff; margin-bottom: 18px;}
 .hero h1 {font-size: 34px; font-weight: 800; margin: 0; color: #fff; padding: 0;}
 .hero p {margin: 6px 0 0; opacity: .85; font-size: 15px;}
 
 div[data-testid="stForm"] {border: none; padding: 0;}
 .stTextInput input {border-radius: 12px !important; font-size: 16px !important; padding: 12px 14px !important;}
-div[data-testid="stFormSubmitButton"] button {width: 100%; border-radius: 12px; border: none;
-  background: linear-gradient(135deg, #6d28d9, #db2777); color: #fff; font-weight: 700;
-  padding: 11px 0; transition: transform .15s, box-shadow .15s;}
-div[data-testid="stFormSubmitButton"] button:hover {transform: translateY(-1px);
-  box-shadow: 0 6px 18px rgba(219,39,119,.35); color: #fff;}
+div[data-testid="stFormSubmitButton"] button {width: 100%; min-width: 110px; border-radius: 12px;
+  border: none; background: #334155; color: #fff; font-weight: 600; padding: 11px 0;
+  white-space: nowrap; transition: background .15s;}
+div[data-testid="stFormSubmitButton"] button:hover {background: #1f2937; color: #fff;}
+div[data-testid="stFormSubmitButton"] button p {white-space: nowrap;}
 
 .empresa {display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;
   gap: 18px; margin: 10px 0 18px;}
 .empresa .titulo {font-size: 28px; font-weight: 800; line-height: 1.15;}
 .empresa .sub {opacity: .65; font-size: 14px; margin-top: 4px;}
-.tick {display:inline-block; background: rgba(109,40,217,.12); color: #6d28d9; border-radius: 8px;
+.tick {display:inline-block; background: rgba(82,98,122,.12); color: #52627a; border-radius: 8px;
   padding: 2px 10px; font-size: 14px; font-weight: 700; margin-left: 8px; vertical-align: middle;}
 
 .stats {display:grid; grid-template-columns: repeat(auto-fit, minmax(150px,1fr)); gap: 12px; margin-bottom: 18px;}
@@ -73,15 +72,16 @@ div[data-testid="stFormSubmitButton"] button:hover {transform: translateY(-1px);
 .notabox .ex {opacity: .7; font-size: 14px; margin-top: 6px; max-width: 620px;}
 
 .tarjeta {background: rgba(128,128,128,.07); border-radius: 16px; padding: 18px 18px 16px;
-  border: 1px solid rgba(128,128,128,.14); border-top: 5px solid var(--c);
+  border: 1px solid rgba(128,128,128,.14); border-top: 3px solid var(--c);
   margin-bottom: 16px; min-height: 270px; transition: transform .15s, box-shadow .15s;}
-.tarjeta:hover {transform: translateY(-2px); box-shadow: 0 8px 22px rgba(0,0,0,.08);}
+.tarjeta:hover {box-shadow: 0 6px 18px rgba(0,0,0,.06);}
 .tarjeta .top {display:flex; justify-content:space-between; align-items:center; gap:8px;}
 .tarjeta .rank {font-size: 11px; opacity: .55; text-transform: uppercase; letter-spacing: .06em; font-weight: 600;}
 .tarjeta .nombre {font-size: 15px; font-weight: 600; margin: 8px 0 4px;}
 .tarjeta .valor {font-size: 32px; font-weight: 800; line-height: 1.1;}
-.badge {background: var(--c); color: #fff; border-radius: 999px; padding: 4px 12px;
-  font-size: 12px; font-weight: 700; white-space: nowrap;}
+.badge {color: var(--c); background: color-mix(in srgb, var(--c) 13%, transparent);
+  border: 1px solid color-mix(in srgb, var(--c) 30%, transparent); border-radius: 999px;
+  padding: 3px 11px; font-size: 12px; font-weight: 600; white-space: nowrap;}
 .barra {height: 7px; border-radius: 99px; background: rgba(128,128,128,.18); margin: 12px 0 4px; overflow: hidden;}
 .barra div {height: 100%; border-radius: 99px; background: var(--c);}
 .frase {font-size: 14px; margin-top: 10px; line-height: 1.45;}
@@ -99,8 +99,14 @@ div[data-testid="stFormSubmitButton"] button:hover {transform: translateY(-1px);
 .tabla td {background: rgba(128,128,128,.07); padding: 10px;}
 .tabla td:first-child {border-radius: 10px 0 0 10px; font-weight: 700;}
 .tabla td:last-child {border-radius: 0 10px 10px 0;}
-.pill {display:inline-block; border-radius: 999px; padding: 3px 10px; font-size: 12px; font-weight: 700;
-  color: #fff; background: var(--c); white-space: nowrap;}
+.pill {display:inline-block; border-radius: 999px; padding: 3px 10px; font-size: 12px; font-weight: 600;
+  color: var(--c); background: color-mix(in srgb, var(--c) 13%, transparent);
+  border: 1px solid color-mix(in srgb, var(--c) 30%, transparent); white-space: nowrap;}
+.links {display:flex; gap: 8px; flex-wrap: wrap;}
+.links a {text-decoration: none !important; font-size: 13px; font-weight: 600; color: #52627a !important;
+  border: 1px solid rgba(82,98,122,.35); border-radius: 10px; padding: 6px 12px;}
+.links a:hover {background: rgba(82,98,122,.08);}
+.fechas {font-size: 12px; opacity: .6; margin-top: -4px;}
 .tabla-wrap {overflow-x: auto; margin-bottom: 18px;}
 </style>""",
     unsafe_allow_html=True,
@@ -109,13 +115,14 @@ div[data-testid="stFormSubmitButton"] button:hover {transform: translateY(-1px);
 # ---------------------------------------------------------------------------
 # Colores y utilidades
 # ---------------------------------------------------------------------------
-VERDE_OSC = "#15803d"
-VERDE = "#16a34a"
-VERDE_CLARO = "#65a30d"
-AMARILLO = "#ca8a04"
-NARANJA = "#ea580c"
-ROJO = "#dc2626"
-GRIS = "#6b7280"
+VERDE_OSC = "#2e7d5b"
+VERDE = "#4a9a72"
+VERDE_CLARO = "#8aa05a"
+AMARILLO = "#bf9a3e"
+NARANJA = "#c47a4c"
+ROJO = "#b5524e"
+GRIS = "#8a8f98"
+ACENTO = "#52627a"
 INF = float("inf")
 
 SECTORES_FINANCIEROS = {"Financial Services", "Financial"}
@@ -184,7 +191,7 @@ def m_margen(info):
 
 
 def m_crecimiento(info):
-    base = {"nombre": "Crecimiento de ventas", "icono": "📈", "corto": "Crecimiento", "peso": 20,
+    base = {"nombre": "Crecimiento de ventas (último trimestre)", "icono": "📈", "corto": "Crecimiento", "peso": 20,
             "escala": "Negativo: malo · 0-5%: flojo · 5-10%: aceptable · 10-20%: bueno · "
                       "20-40%: muy bueno · +40%: excelente"}
     v = num(info.get("revenueGrowth"))
@@ -194,9 +201,11 @@ def m_crecimiento(info):
                            (0.10, "Aceptable", 5, AMARILLO), (0.20, "Bueno", 7, VERDE_CLARO),
                            (0.40, "Muy bueno", 9, VERDE), (INF, "Excelente", 10, VERDE_OSC)])
     if v < 0:
-        frase = f"Vende {fmt_pct(abs(v))} menos que hace un año."
+        frase = (f"En el último trimestre vendió {fmt_pct(abs(v))} menos que en el mismo "
+                 "trimestre del año anterior.")
     else:
-        frase = f"Vende {fmt_pct(v)} más que hace un año."
+        frase = (f"En el último trimestre vendió {fmt_pct(v)} más que en el mismo "
+                 "trimestre del año anterior.")
     return resultado(base, fmt_pct(v), et, p, c, frase)
 
 
@@ -315,12 +324,12 @@ def chequeos(info, reverse_splits, dilucion):
     if fcf is None:
         chips.append(("Flujo de caja: sin dato", GRIS))
     elif fcf >= 0:
-        chips.append((f"Genera caja (USD {fmt_num(fcf / 1e6, 0)} MM/año)", VERDE))
+        chips.append(("Genera caja", VERDE))
     else:
         if caja:
             runway = caja / -fcf
             color = ROJO if runway < 1.5 else AMARILLO
-            chips.append((f"Quema caja: le alcanza para {fmt_num(runway)} años", color))
+            chips.append((f"Quema caja: le alcanza para ~{fmt_num(runway)} años (aprox.)", color))
         else:
             chips.append(("Quema caja", ROJO))
     return chips
@@ -498,10 +507,18 @@ def html_empresa(r):
              ("Último año", var_txt), ("Desde el máximo", desde_max)]
     grid = "".join(f'<div class="stat"><div class="l">{l}</div><div class="v">{v}</div></div>'
                    for l, v in stats)
+    t = r["ticker"]
+    links = (
+        f'<div class="links">'
+        f'<a href="https://finance.yahoo.com/quote/{e(t)}/key-statistics" target="_blank">'
+        f"Verificar en Yahoo ↗</a>"
+        f'<a href="https://stockanalysis.com/stocks/{e(t.lower())}/statistics/" target="_blank">'
+        f"Verificar en StockAnalysis ↗</a></div>"
+    )
     return (
         f'<div class="empresa"><div><div class="titulo">{e(nombre)}'
-        f'<span class="tick">{e(r["ticker"])}</span></div>'
-        f'<div class="sub">{e(sub)}</div></div></div>'
+        f'<span class="tick">{e(t)}</span></div>'
+        f'<div class="sub">{e(sub)}</div></div>{links}</div>'
         f'<div class="stats">{grid}</div>'
     )
 
@@ -553,7 +570,10 @@ def mostrar(r):
     if len(r["hist"]) > 1:
         st.markdown('<div class="seccion" style="margin-top:22px">Precio del último año (USD)</div>',
                     unsafe_allow_html=True)
-        st.area_chart(r["hist"], height=240, color="#7c3aed")
+        h = r["hist"]
+        st.markdown(f'<div class="fechas">Del {h.index[0]:%d/%m/%Y} al {h.index[-1]:%d/%m/%Y} '
+                    f"· {len(h)} ruedas</div>", unsafe_allow_html=True)
+        st.area_chart(h, height=240, color="#64748b")
 
 
 # ---------------------------------------------------------------------------
@@ -567,7 +587,7 @@ st.markdown(
 )
 
 with st.form("buscar", border=False):
-    c1, c2 = st.columns([5, 1], vertical_alignment="bottom")
+    c1, c2 = st.columns([4, 1], vertical_alignment="bottom")
     entrada = c1.text_input("Tickers", placeholder="Ej: MELI, NU, CLX",
                             label_visibility="collapsed")
     enviar = c2.form_submit_button("Analizar")
