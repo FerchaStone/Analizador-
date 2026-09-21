@@ -85,7 +85,7 @@ div[data-testid="stFormSubmitButton"] button p {white-space: nowrap;}
 
 .tarjeta {background: rgba(128,128,128,.07); border-radius: 16px; padding: 18px 18px 16px;
   border: 1px solid rgba(128,128,128,.14); border-top: 3px solid var(--c);
-  margin-bottom: 16px; min-height: 270px; transition: transform .15s, box-shadow .15s;}
+  margin-bottom: 16px; min-height: 300px; transition: transform .15s, box-shadow .15s;}
 .tarjeta:hover {box-shadow: 0 6px 18px rgba(0,0,0,.06);}
 .tarjeta .top {display:flex; justify-content:space-between; align-items:center; gap:8px;}
 .tarjeta .rank {font-size: 11px; opacity: .55; text-transform: uppercase; letter-spacing: .06em; font-weight: 600;}
@@ -197,7 +197,7 @@ def sin_dato(base):
 # Los 6 indicadores, en orden de importancia
 # ---------------------------------------------------------------------------
 def m_margen(info):
-    base = {"nombre": "Rentabilidad (margen neto)", "icono": "💰", "corto": "Rentabilidad", "peso": 20,
+    base = {"nombre": "Rentabilidad (margen neto)", "icono": "💰", "corto": "Rentabilidad", "peso": 25,
             "escala": "Negativo: malo · 0-5%: flojo · 5-10%: aceptable · 10-20%: bueno · "
                       "20-30%: muy bueno · +30%: excelente"}
     v = num(info.get("profitMargins"))
@@ -214,7 +214,7 @@ def m_margen(info):
 
 
 def m_crecimiento(info):
-    base = {"nombre": "Crecimiento de ventas (último trimestre)", "icono": "📈", "corto": "Crecimiento", "peso": 20,
+    base = {"nombre": "Crecimiento de ventas (último trimestre)", "icono": "📈", "corto": "Crecimiento", "peso": 15,
             "escala": "Negativo: malo · 0-5%: flojo · 5-10%: aceptable · 10-20%: bueno · "
                       "20-40%: muy bueno · +40%: excelente"}
     v = num(info.get("revenueGrowth"))
@@ -256,7 +256,7 @@ def m_valuacion(info):
 
 
 def m_deuda(info):
-    base = {"nombre": "Deuda / Patrimonio", "icono": "🏦", "corto": "Deuda", "peso": 15,
+    base = {"nombre": "Deuda / Patrimonio", "icono": "🏦", "corto": "Deuda", "peso": 10,
             "escala": "-0,3x: excelente · 0,3-0,7x: muy bueno · 0,7-1,2x: bueno · "
                       "1,2-2x: aceptable · 2-3x: flojo · +3x: alto. Con tasas altas pesa más."}
     if info.get("sector") in SECTORES_FINANCIEROS:
@@ -279,7 +279,7 @@ def m_deuda(info):
 
 
 def m_roe(info):
-    base = {"nombre": "ROE (retorno sobre capital)", "icono": "⚙️", "corto": "ROE", "peso": 15,
+    base = {"nombre": "ROE (retorno sobre capital)", "icono": "⚙️", "corto": "ROE", "peso": 10,
             "escala": "Negativo: malo · 0-8%: flojo · 8-15%: aceptable · 15-20%: bueno · "
                       "20-30%: muy bueno · +30%: excelente. Arriba de 60% suele ser engañoso."}
     v = num(info.get("returnOnEquity"))
@@ -297,7 +297,7 @@ def m_roe(info):
 
 
 def m_dividendo(info, precio):
-    base = {"nombre": "Dividendo", "icono": "💵", "corto": "Dividendo", "peso": 10,
+    base = {"nombre": "Dividendo", "icono": "💵", "corto": "Dividendo", "peso": 5,
             "escala": "Se evalúa el payout (qué parte de la ganancia reparte): -50%: muy "
                       "sostenible · 50-70%: sostenible · 70-90%: ajustado · +90%: en riesgo"}
     rate = num(info.get("dividendRate"))
@@ -322,8 +322,34 @@ def m_dividendo(info, precio):
 # ---------------------------------------------------------------------------
 # Chequeos de riesgo
 # ---------------------------------------------------------------------------
-def chequeos(info, reverse_splits, dilucion):
+def m_fscore(fs, info):
+    base = {"nombre": "Salud del balance (Piotroski F-Score)", "icono": "🩺", "corto": "Salud",
+            "peso": 15,
+            "escala": "0-3: débil · 4-5: regular · 6-7: sólida · 8-9: muy sólida. "
+                      "Compara el último año contra el anterior."}
+    if info.get("sector") in SECTORES_FINANCIEROS:
+        return resultado(base, "—", "No aplica", None, GRIS,
+                         "Está pensado para empresas industriales y comerciales, no para bancos.")
+    if not fs or fs["total"] < 7:
+        return sin_dato(base)
+    ok, total = fs["ok"], fs["total"]
+    score9 = ok / total * 9
+    et, p, c = escalon(score9, [(4, "Débil", 2, ROJO), (6, "Regular", 5, AMARILLO),
+                                (8, "Sólida", 8, VERDE), (INF, "Muy sólida", 10, VERDE_OSC)])
+    frase = f"Pasa {ok} de {total} pruebas de salud: rentabilidad, deuda y eficiencia, año contra año."
+    valor = f"{ok}/{total}"
+    return {**resultado(base, valor, et, p, c, frase), "pruebas": fs["pruebas"]}
+
+
+def chequeos(info, reverse_splits, dilucion, z=None):
     chips = []
+    if z is not None and info.get("sector") not in SECTORES_FINANCIEROS:
+        if z < 1.81:
+            chips.append((f"Riesgo de quiebra alto (Altman Z {fmt_num(z, 2)})", ROJO))
+        elif z < 2.99:
+            chips.append((f"Zona gris de Altman (Z {fmt_num(z, 2)})", AMARILLO))
+        else:
+            chips.append((f"Bajo riesgo de quiebra (Altman Z {fmt_num(z, 2)})", VERDE))
     if reverse_splits is None:
         chips.append(("Reverse splits: sin dato", GRIS))
     elif reverse_splits == 0:
@@ -428,7 +454,14 @@ def traer_datos(ticker):
     except Exception:
         dilucion = None
 
-    return info, precio, hist, reverse, dilucion, parcial
+    try:
+        fin, bal, caja = tk.financials, tk.balance_sheet, tk.cashflow
+        fscore = calcular_fscore(fin, bal, caja)
+        zscore = calcular_zscore(fin, bal, info)
+    except Exception:
+        fscore, zscore = None, None
+
+    return info, precio, hist, reverse, dilucion, parcial, fscore, zscore
 
 
 ARGENTINA = timezone(timedelta(hours=-3))
@@ -447,6 +480,81 @@ def hora_arg(texto):
         return f"{dt:%d/%m %H:%M}"
     except Exception:
         return None
+
+
+def fila(df, nombres, col):
+    """Valor de la primera fila que exista, en la columna col (0 = ultimo anio)."""
+    if df is None or getattr(df, "empty", True) or df.shape[1] <= col:
+        return None
+    for n in nombres:
+        if n in df.index:
+            return num(df.loc[n].iloc[col])
+    return None
+
+
+def calcular_fscore(fin, bal, caja):
+    """Piotroski F-Score con los dos ultimos balances anuales. Omite las pruebas sin datos."""
+    NI = ["Net Income", "Net Income Common Stockholders"]
+    TA = ["Total Assets"]
+    CFO = ["Operating Cash Flow", "Cash Flow From Continuing Operating Activities"]
+    LTD = ["Long Term Debt", "Long Term Debt And Capital Lease Obligation"]
+    CA, CL = ["Current Assets"], ["Current Liabilities"]
+    SH = ["Ordinary Shares Number", "Share Issued"]
+    REV = ["Total Revenue", "Operating Revenue"]
+    GP = ["Gross Profit"]
+
+    def g(df, n, c):
+        return fila(df, n, c)
+
+    def div(a, b):
+        return a / b if a is not None and b not in (None, 0) else None
+
+    ni0, ni1 = g(fin, NI, 0), g(fin, NI, 1)
+    ta0, ta1 = g(bal, TA, 0), g(bal, TA, 1)
+    cfo0 = g(caja, CFO, 0)
+    roa0, roa1 = div(ni0, ta0), div(ni1, ta1)
+    lev0, lev1 = div(g(bal, LTD, 0), ta0), div(g(bal, LTD, 1), ta1)
+    cr0, cr1 = div(g(bal, CA, 0), g(bal, CL, 0)), div(g(bal, CA, 1), g(bal, CL, 1))
+    sh0, sh1 = g(bal, SH, 0), g(bal, SH, 1)
+    rev0, rev1 = g(fin, REV, 0), g(fin, REV, 1)
+    gm0, gm1 = div(g(fin, GP, 0), rev0), div(g(fin, GP, 1), rev1)
+    at0, at1 = div(rev0, ta0), div(rev1, ta1)
+
+    candidatas = [
+        ("Gana plata (resultado positivo)", None if roa0 is None else roa0 > 0),
+        ("Genera caja operativa", None if cfo0 is None else cfo0 > 0),
+        ("Mejoró su rentabilidad sobre activos", None if None in (roa0, roa1) else roa0 > roa1),
+        ("La caja que genera supera a la ganancia contable",
+         None if None in (cfo0, ni0) else cfo0 > ni0),
+        ("Bajó su deuda de largo plazo (sobre activos)",
+         None if None in (lev0, lev1) else lev0 <= lev1),
+        ("Mejoró su liquidez de corto plazo", None if None in (cr0, cr1) else cr0 > cr1),
+        ("No emitió acciones nuevas", None if None in (sh0, sh1) else sh0 <= sh1 * 1.005),
+        ("Mejoró su margen bruto", None if None in (gm0, gm1) else gm0 > gm1),
+        ("Vende más por cada peso de activos", None if None in (at0, at1) else at0 > at1),
+    ]
+    pruebas = [(t, bool(r)) for t, r in candidatas if r is not None]
+    if not pruebas:
+        return None
+    return {"ok": sum(1 for _, r in pruebas if r), "total": len(pruebas), "pruebas": pruebas}
+
+
+def calcular_zscore(fin, bal, info):
+    """Altman Z-Score original (1968), con el ultimo balance anual."""
+    ta = fila(bal, ["Total Assets"], 0)
+    ca, cl = fila(bal, ["Current Assets"], 0), fila(bal, ["Current Liabilities"], 0)
+    wc = fila(bal, ["Working Capital"], 0)
+    if wc is None and None not in (ca, cl):
+        wc = ca - cl
+    re_ = fila(bal, ["Retained Earnings"], 0)
+    ebit = fila(fin, ["EBIT", "Operating Income"], 0)
+    pasivo = fila(bal, ["Total Liabilities Net Minority Interest", "Total Liabilities"], 0)
+    ventas = fila(fin, ["Total Revenue", "Operating Revenue"], 0)
+    mcap = num(info.get("marketCap"))
+    if None in (ta, wc, re_, ebit, pasivo, ventas, mcap) or ta == 0 or pasivo == 0:
+        return None
+    return (1.2 * wc / ta + 1.4 * re_ / ta + 3.3 * ebit / ta
+            + 0.6 * mcap / pasivo + 1.0 * ventas / ta)
 
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -589,14 +697,15 @@ def contexto_mercado():
 
 def analizar(ticker):
     try:
-        info, precio, hist, reverse, dilucion, parcial = traer_datos(ticker)
+        info, precio, hist, reverse, dilucion, parcial, fscore, zscore = traer_datos(ticker)
     except Exception as e:
         return {"ticker": ticker, "error": str(e)}
 
-    metricas = [m_margen(info), m_crecimiento(info), m_valuacion(info),
+    # Orden = peso en la nota (de mayor a menor)
+    metricas = [m_margen(info), m_valuacion(info), m_crecimiento(info), m_fscore(fscore, info),
                 m_deuda(info), m_roe(info), m_dividendo(info, precio)]
     validas = [m for m in metricas if m["puntos"] is not None]
-    chips = chequeos(info, reverse, dilucion)
+    chips = chequeos(info, reverse, dilucion, zscore)
 
     # Penalizacion por riesgos: cada alerta roja resta 1,5 y cada amarilla 0,5
     penalizacion = sum(1.5 if c == ROJO else 0.5 if c == AMARILLO else 0 for _, c in chips)
@@ -642,7 +751,7 @@ def html_tarjeta(m, rank):
         barra = f'<div class="barra"><div style="width:{m["puntos"] * 10:.0f}%"></div></div>'
     return (
         f'<div class="tarjeta" style="--c:{m["color"]}">'
-        f'<div class="top"><span class="rank">#{rank} en importancia</span>'
+        f'<div class="top"><span class="rank">#{rank} · peso {m["peso"]}%</span>'
         f'<span class="badge">{e(m["etiqueta"])}</span></div>'
         f'<div class="nombre">{m["icono"]} {e(m["nombre"])}</div>'
         f'<div class="valor">{e(m["valor"])}</div>'
@@ -747,12 +856,19 @@ def mostrar(r):
 
     st.markdown('<div class="seccion">Indicadores, de más a menos importante</div>',
                 unsafe_allow_html=True)
-    for fila in range(2):
-        cols = st.columns(3)
-        for j in range(3):
-            i = fila * 3 + j
-            with cols[j]:
-                st.markdown(html_tarjeta(r["metricas"][i], i + 1), unsafe_allow_html=True)
+    n = len(r["metricas"])
+    for inicio in range(0, n, 4):
+        cols = st.columns(4)
+        for j in range(4):
+            i = inicio + j
+            if i < n:
+                with cols[j]:
+                    st.markdown(html_tarjeta(r["metricas"][i], i + 1), unsafe_allow_html=True)
+
+    fs = next((m for m in r["metricas"] if m.get("pruebas")), None)
+    if fs:
+        with st.expander(f"Ver las pruebas del F-Score ({fs['valor']})"):
+            st.markdown("\n".join(f"- {'✅' if ok else '❌'} {t}" for t, ok in fs["pruebas"]))
 
     st.markdown('<div class="seccion">Chequeos de riesgo</div>', unsafe_allow_html=True)
     st.markdown("".join(f'<span class="chip" style="--c:{c}">{e(t)}</span>'
@@ -940,12 +1056,25 @@ if tickers:
             with tab:
                 mostrar(r)
 
-with st.expander("¿Por qué este orden de importancia?"):
+with st.expander("¿Cómo se calcula la nota?"):
     st.markdown(
-        "1. **Rentabilidad** — si no gana plata, todo lo demás es promesa.\n"
-        "2. **Crecimiento** — una empresa rentable que no crece se estanca.\n"
-        "3. **Valuación** — una gran empresa comprada carísima puede ser una mala inversión.\n"
-        "4. **Deuda** — con tasas altas, estar muy endeudada pesa más.\n"
-        "5. **ROE** — útil, pero se infla con recompras y deuda.\n"
-        "6. **Dividendo** — solo importa si buscás renta; si no paga, no resta."
+        "Cada indicador se pasa a un puntaje de 0 a 10 según su escala, y se promedian con "
+        "estos pesos:\n\n"
+        "1. **Rentabilidad — 25%.** Es lo que más respaldo tiene en la investigación: las "
+        "empresas más rentables rindieron más históricamente.\n"
+        "2. **Valuación — 20%.** Comprar barato funcionó a largo plazo, aunque anduvo flojo en "
+        "los últimos años.\n"
+        "3. **Crecimiento — 15%.** Importa para tu objetivo, pero por sí solo no predice "
+        "retornos.\n"
+        "4. **Salud del balance (F-Score) — 15%.** Nueve pruebas que miran si la empresa mejora "
+        "o empeora año contra año.\n"
+        "5. **Deuda — 10%.** El riesgo de quiebra lo cubre además el Altman Z en los chequeos.\n"
+        "6. **ROE — 10%.** Se superpone con rentabilidad y se infla con recompras.\n"
+        "7. **Dividendo — 5%.** No predice retornos; si no paga, no resta.\n\n"
+        "Lo que no aplica (deuda y F-Score en bancos, dividendo si no paga) se saca y el resto "
+        "se re-reparte. Después se restan 1,5 puntos por cada alerta roja y 0,5 por cada "
+        "amarilla de los chequeos de riesgo.\n\n"
+        "**Importante:** los pesos y las escalas son criterio propio basado en la evidencia "
+        "general, no están probados con datos históricos. La nota resume la salud financiera; "
+        "no predice si la acción va a subir."
     )
