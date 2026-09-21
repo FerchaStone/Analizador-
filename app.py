@@ -417,51 +417,38 @@ def con_reintentos(fn, intentos=3):
     raise ultimo
 
 
+# Cada pedido a Yahoo se guarda por separado y solo si salio bien: asi un corte
+# momentaneo no queda "pegado" una hora, y los datos que cambian poco (balances,
+# splits) no se vuelven a pedir en cada analisis, lo que evita el limite de consultas.
+DATOS_CLAVE = ("profitMargins", "revenueGrowth", "forwardPE", "trailingPE")
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
-def traer_datos(ticker):
-    """Lanza excepcion si no consigue ni el precio (asi los errores no quedan cacheados)."""
+def yahoo_info(ticker):
+    info = dict(con_reintentos(lambda: yf.Ticker(ticker).info) or {})
+    if not any(info.get(k) is not None for k in DATOS_CLAVE):
+        raise ValueError("Yahoo devolvió la ficha vacía")
+    return info
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def yahoo_historia(ticker):
+    h = con_reintentos(lambda: yf.Ticker(ticker).history(period="1y"))["Close"].dropna()
+    if len(h) == 0:
+        raise ValueError("Sin historial de precios")
+    h.index = h.index.tz_localize(None)
+    return h
+
+
+@st.cache_data(ttl=24 * 3600, show_spinner=False)
+def yahoo_splits_y_dilucion(ticker):
     tk = yf.Ticker(ticker)
-
-    info, detalle = {}, ""
-    try:
-        info = dict(con_reintentos(lambda: tk.info) or {})
-    except Exception as e:
-        detalle = f"{type(e).__name__}: {e}"
-
-    try:
-        hist = con_reintentos(lambda: tk.history(period="1y"))["Close"]
-        hist.index = hist.index.tz_localize(None)
-    except Exception:
-        hist = pd.Series(dtype=float)
-
-    precio = num(info.get("currentPrice")) or num(info.get("regularMarketPrice"))
-    if precio is None:
-        try:
-            precio = num(tk.fast_info["lastPrice"])
-        except Exception:
-            precio = None
-    if precio is None and len(hist):
-        precio = float(hist.iloc[-1])
-    if precio is None:
-        raise ValueError(
-            "Yahoo no devolvió datos. Puede ser el ticker (usá el de EE.UU., no el .BA) "
-            "o un límite de consultas de Yahoo: probá de nuevo en unos minutos."
-            + (f" Detalle técnico: {detalle}" if detalle else "")
-        )
-
-    parcial = not any(info.get(k) is not None for k in
-                      ("profitMargins", "revenueGrowth", "forwardPE", "trailingPE"))
-
-    try:
-        s = tk.splits
-        if s is None or len(s) == 0:
-            reverse = 0
-        else:
-            limite = pd.Timestamp.now(tz=s.index.tz) - pd.DateOffset(years=5)
-            reverse = int((s[s.index >= limite] < 1).sum())
-    except Exception:
-        reverse = None
-
+    s = con_reintentos(lambda: tk.splits)
+    if s is None or len(s) == 0:
+        reverse = 0
+    else:
+        limite = pd.Timestamp.now(tz=s.index.tz) - pd.DateOffset(years=5)
+        reverse = int((s[s.index >= limite] < 1).sum())
     try:
         inicio = (datetime.now() - timedelta(days=3 * 365)).strftime("%Y-%m-%d")
         sh = tk.get_shares_full(start=inicio)
@@ -471,15 +458,57 @@ def traer_datos(ticker):
         dilucion = (ultimo / primero) ** (1 / anios) - 1 if primero > 0 and anios >= 0.5 else None
     except Exception:
         dilucion = None
+    return reverse, dilucion
+
+
+@st.cache_data(ttl=24 * 3600, show_spinner=False)
+def yahoo_balances(ticker):
+    tk = yf.Ticker(ticker)
+    fin = con_reintentos(lambda: tk.financials)
+    bal = con_reintentos(lambda: tk.balance_sheet)
+    caja = con_reintentos(lambda: tk.cashflow)
+    if fin is None or fin.empty or bal is None or bal.empty:
+        raise ValueError("Sin balances")
+    return fin, bal, caja
+
+
+def traer_datos(ticker):
+    """Arma todo con lo que se pueda conseguir. Lanza excepcion si no hay ni precio."""
+    info, detalle = {}, ""
+    try:
+        info = yahoo_info(ticker)
+    except Exception as e:
+        detalle = f"{type(e).__name__}: {e}"
 
     try:
-        fin, bal, caja = tk.financials, tk.balance_sheet, tk.cashflow
+        hist = yahoo_historia(ticker)
+    except Exception:
+        hist = pd.Series(dtype=float)
+
+    precio = num(info.get("currentPrice")) or num(info.get("regularMarketPrice"))
+    if precio is None and len(hist):
+        precio = float(hist.iloc[-1])
+    if precio is None:
+        raise ValueError(
+            "Yahoo no devolvió datos. Puede ser el ticker (usá el de EE.UU., no el .BA) "
+            "o un límite de consultas de Yahoo: probá de nuevo en unos minutos."
+            + (f" Detalle técnico: {detalle}" if detalle else "")
+        )
+    parcial = not info
+
+    try:
+        reverse, dilucion = yahoo_splits_y_dilucion(ticker)
+    except Exception:
+        reverse, dilucion = None, None
+
+    try:
+        fin, bal, caja = yahoo_balances(ticker)
         fscore = calcular_fscore(fin, bal, caja)
-        zscore = calcular_zscore(fin, bal, info)
+        zscore = calcular_zscore(fin, bal, info) if info else None
     except Exception:
         fscore, zscore = None, None
 
-    return info, precio, hist, reverse, dilucion, parcial, fscore, zscore
+    return info, precio, hist, reverse, dilucion, parcial, fscore, zscore, detalle
 
 
 ARGENTINA = timezone(timedelta(hours=-3))
@@ -715,7 +744,7 @@ def contexto_mercado():
 
 def analizar(ticker):
     try:
-        info, precio, hist, reverse, dilucion, parcial, fscore, zscore = traer_datos(ticker)
+        info, precio, hist, reverse, dilucion, parcial, fscore, zscore, detalle = traer_datos(ticker)
     except Exception as e:
         return {"ticker": ticker, "error": str(e)}
 
@@ -724,10 +753,11 @@ def analizar(ticker):
                 m_deuda(info), m_roe(info), m_dividendo(info, precio)]
     validas = [m for m in metricas if m["puntos"] is not None]
     chips = chequeos(info, reverse, dilucion, zscore)
+    minimo = 4  # con menos indicadores que esto, la nota no es representativa
 
     # Penalizacion por riesgos: cada alerta roja resta 1,5 y cada amarilla 0,5
     penalizacion = sum(1.5 if c == ROJO else 0.5 if c == AMARILLO else 0 for _, c in chips)
-    if validas:
+    if len(validas) >= minimo and not parcial:
         base = sum(m["puntos"] * m["peso"] for m in validas) / sum(m["peso"] for m in validas)
         nota = max(0.0, base - penalizacion)
     else:
@@ -742,7 +772,8 @@ def analizar(ticker):
     return {"ticker": ticker, "error": None, "info": info, "precio": precio, "hist": hist,
             "tipo": tipo, "cedear": precio_cedear(ticker), "spx": spx,
             "metricas": metricas, "nota": nota, "n_validas": len(validas),
-            "penalizacion": penalizacion, "chips": chips, "parcial": parcial}
+            "penalizacion": penalizacion, "chips": chips, "parcial": parcial,
+            "detalle": detalle, "minimo": minimo}
 
 
 def calificacion_global(nota):
@@ -782,18 +813,22 @@ def html_tarjeta(m, rank):
 
 def html_nota(r):
     etiqueta, color = calificacion_global(r["nota"])
+    total = len(r["metricas"])
     if r["nota"] is None:
         n, p = "—", 0
+        explicacion = (f"Solo hay datos para {r['n_validas']} de {total} indicadores: con tan poco, "
+                       "una nota sería engañosa. Probá de nuevo en unos minutos.")
     else:
         n, p = fmt_num(r["nota"]), r["nota"] * 10
-    castigo = (f" Incluye {fmt_num(r['penalizacion'])} puntos menos por los chequeos de riesgo."
-               if r["penalizacion"] else "")
+        castigo = (f" Incluye {fmt_num(r['penalizacion'])} puntos menos por los chequeos de riesgo."
+                   if r["penalizacion"] else "")
+        explicacion = (f"Nota ponderada sobre {r['n_validas']} de {total} indicadores.{castigo} "
+                       "Resume los números: no dice si comprar.")
     return (
         f'<div class="notabox" style="--c:{color};--p:{p:.0f}">'
         f'<div class="anillo"><div class="ring"></div><div class="n">{n}<small>de 10</small></div></div>'
         f'<div><div class="et">{e(etiqueta)}</div>'
-        f'<div class="ex">Nota ponderada sobre {r["n_validas"]} de 6 indicadores.{castigo} '
-        f"Resume los números: no dice si comprar.</div></div></div>"
+        f'<div class="ex">{e(explicacion)}</div></div></div>'
     )
 
 
@@ -868,8 +903,10 @@ def mostrar(r):
 
     st.markdown(html_empresa(r), unsafe_allow_html=True)
     if r["parcial"]:
-        st.warning("Yahoo devolvió el precio pero no los datos de balance (suele ser un límite "
-                   "de consultas). Probá de nuevo en unos minutos.")
+        st.warning("Yahoo devolvió el precio pero no la ficha de la empresa (suele ser un límite "
+                   "de consultas momentáneo). Esperá unos minutos y tocá **Analizar** de nuevo: "
+                   "no hace falta tocar Actualizar."
+                   + (f"\n\nDetalle técnico: `{r['detalle']}`" if r.get("detalle") else ""))
     st.markdown(html_nota(r), unsafe_allow_html=True)
 
     st.markdown('<div class="seccion">Indicadores, de más a menos importante</div>',
@@ -1010,8 +1047,12 @@ st.markdown(
 col_franja, col_boton = st.columns([6, 1], vertical_alignment="center")
 with col_boton:
     if st.button("🔄 Actualizar", use_container_width=True,
-                 help="Vuelve a pedir todos los datos: dólar, tasa y acciones."):
-        st.cache_data.clear()
+                 help="Vuelve a pedir el dólar, la tasa y los precios de los CEDEARs."):
+        # Solo lo que cambia durante el dia: dolar, tasa y precios de CEDEAR/indice.
+        # Los datos de las empresas no se borran, para no gatillar el limite de Yahoo.
+        dolar.clear()
+        serie.clear()
+        precio_cedear.clear()
 
 ctx = contexto_mercado()
 
