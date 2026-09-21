@@ -34,6 +34,10 @@ RATIOS = {}
 
 COMAFI_PAGINA = "https://www.comafi.com.ar/custodiaglobal/programas.aspx"
 
+# Supuestos del "crecimiento que descuenta el precio" (tarjeta de valuacion).
+TASA_DESCUENTO = 0.10  # rendimiento anual pedido: Treasury ~5% + prima de riesgo ~5%
+PER_SALIDA = 18        # PER al que se supone que cotiza dentro de 5 anios
+
 # ---------------------------------------------------------------------------
 # Estilo
 # ---------------------------------------------------------------------------
@@ -235,7 +239,8 @@ def m_crecimiento(info):
 def m_valuacion(info):
     base = {"nombre": "Valuación (PER)", "icono": "🏷️", "corto": "Valuación", "peso": 20,
             "escala": "-10x: muy barato (ojo trampas) · 10-15x: barato · 15-22x: razonable · "
-                      "22-30x: exigente · 30-45x: caro · +45x: muy caro. Tech suele cotizar más caro."}
+                      "22-30x: exigente · 30-45x: caro · +45x: muy caro. El crecimiento descontado supone "
+                      "un 10% anual de rendimiento pedido y un PER de 18x dentro de 5 años."}
     forward = num(info.get("forwardPE"))
     trailing = num(info.get("trailingPE"))
     pe = forward if forward is not None else trailing
@@ -252,6 +257,19 @@ def m_valuacion(info):
     frase = f"Pagás {fmt_num(pe, 0)} años de ganancias {tipo}."
     if pe < 10:
         frase += " Tan bajo a veces significa que el mercado espera problemas."
+
+    # Crecimiento que descuenta el precio (DCF inverso simple, a 5 anios).
+    # El dividendo cubre parte del rendimiento pedido, asi que se descuenta de la tasa.
+    precio = num(info.get("currentPrice")) or num(info.get("regularMarketPrice"))
+    div = num(info.get("dividendRate"))
+    rinde = div / precio if (div and precio) else 0.0
+    r = max(0.02, TASA_DESCUENTO - rinde)
+    g = (pe * (1 + r) ** 5 / PER_SALIDA) ** (1 / 4) - 1
+    frase += (f" El precio actual descuenta que sus ganancias crezcan ~{fmt_pct(g, 0)} "
+              "por año durante 5 años.")
+    crec = num(info.get("revenueGrowth"))
+    if crec is not None:
+        frase += f" Hoy sus ventas crecen {fmt_pct(crec, 0)}."
     return resultado(base, fmt_x(pe), et, p, c, frase)
 
 
@@ -1063,7 +1081,9 @@ with st.expander("¿Cómo se calcula la nota?"):
         "1. **Rentabilidad — 25%.** Es lo que más respaldo tiene en la investigación: las "
         "empresas más rentables rindieron más históricamente.\n"
         "2. **Valuación — 20%.** Comprar barato funcionó a largo plazo, aunque anduvo flojo en "
-        "los últimos años.\n"
+        "los últimos años. La tarjeta también muestra cuánto crecimiento de ganancias ya está "
+        "incluido en el precio: si es mucho más que lo que crece hoy, el precio es exigente. "
+        "Ese dato es informativo y no suma ni resta a la nota.\n"
         "3. **Crecimiento — 15%.** Importa para tu objetivo, pero por sí solo no predice "
         "retornos.\n"
         "4. **Salud del balance (F-Score) — 15%.** Nueve pruebas que miran si la empresa mejora "
