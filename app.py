@@ -13,7 +13,9 @@ Datos: Yahoo Finance via yfinance. Son orientativos: verificar antes de decidir.
 """
 
 import html
+import json
 import time
+import urllib.request
 from datetime import datetime, timedelta
 
 import pandas as pd
@@ -21,6 +23,12 @@ import streamlit as st
 import yfinance as yf
 
 st.set_page_config(page_title="Analizador de acciones", page_icon="📊", layout="wide")
+
+# Ratios de CEDEAR que quieras dejar guardados (cuantos CEDEARs = 1 accion).
+# Sacalos del detalle del CEDEAR en tu broker o del listado oficial de Comafi, y
+# revisalos si hay un split. Ejemplo de formato: RATIOS = {"MELI": 120, "NU": 2}
+# (esos numeros son solo un ejemplo de formato, no datos reales).
+RATIOS = {}
 
 # ---------------------------------------------------------------------------
 # Estilo
@@ -107,6 +115,17 @@ div[data-testid="stFormSubmitButton"] button p {white-space: nowrap;}
   border: 1px solid rgba(82,98,122,.35); border-radius: 10px; padding: 6px 12px;}
 .links a:hover {background: rgba(82,98,122,.08);}
 .fechas {font-size: 12px; opacity: .6; margin-top: -4px;}
+.tag {display:inline-block; font-size: 12px; font-weight: 600; opacity: .75; border-radius: 8px;
+  padding: 2px 9px; margin-left: 6px; vertical-align: middle; border: 1px solid rgba(128,128,128,.35);}
+.franja {display:grid; grid-template-columns: repeat(auto-fit, minmax(170px,1fr)); gap: 10px; margin-bottom: 18px;}
+.franja .stat .v {font-size: 19px;}
+.franja .stat .d {font-size: 12px; opacity: .6; margin-top: 2px;}
+.ced {border-radius: 16px; padding: 16px 20px; background: rgba(128,128,128,.07);
+  border: 1px solid rgba(128,128,128,.15); margin: 6px 0 14px;}
+.ced .grande {font-size: 24px; font-weight: 800; color: var(--c);}
+.ced .fila {display:flex; gap: 28px; flex-wrap: wrap; margin-top: 8px;}
+.ced .fila div {font-size: 14px;}
+.ced .fila b {display:block; font-size: 18px;}
 .tabla-wrap {overflow-x: auto; margin-bottom: 18px;}
 </style>""",
     unsafe_allow_html=True,
@@ -408,6 +427,57 @@ def traer_datos(ticker):
     return info, precio, hist, reverse, dilucion, parcial
 
 
+@st.cache_data(ttl=600, show_spinner=False)
+def dolar(tipo):
+    """Cotizacion de venta desde DolarApi. tipo: 'contadoconliqui' o 'bolsa' (MEP)."""
+    for url in (f"https://dolarapi.com/v1/dolares/{tipo}",
+                f"https://dolarapi.com/v1/ambito/dolares/{tipo}"):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                d = json.loads(resp.read().decode())
+            v = num(d.get("venta"))
+            if v:
+                return v
+        except Exception:
+            continue
+    return None
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def serie(simbolo, periodo="1y"):
+    """Serie de cierres. Lanza excepcion si falla (no queda cacheada)."""
+    h = con_reintentos(lambda: yf.Ticker(simbolo).history(period=periodo))["Close"].dropna()
+    if len(h) == 0:
+        raise ValueError(f"Sin datos para {simbolo}")
+    h.index = h.index.tz_localize(None)
+    return h
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def precio_cedear(ticker):
+    """Ultimo cierre del CEDEAR en Buenos Aires (Yahoo, simbolo .BA). None si no lo encuentra."""
+    for simbolo in dict.fromkeys([f"{ticker}.BA", f"{ticker.replace('-', '')}.BA"]):
+        try:
+            h = yf.Ticker(simbolo).history(period="5d")["Close"].dropna()
+            if len(h):
+                return {"simbolo": simbolo, "precio": float(h.iloc[-1]),
+                        "fecha": h.index[-1].strftime("%d/%m/%Y")}
+        except Exception:
+            continue
+    return None
+
+
+def contexto_mercado():
+    ccl, mep = dolar("contadoconliqui"), dolar("bolsa")
+    try:
+        tnx = serie("^TNX", "5d")
+        tasa, cambio = float(tnx.iloc[-1]), float(tnx.iloc[-1] - tnx.iloc[-2]) if len(tnx) > 1 else None
+    except Exception:
+        tasa, cambio = None, None
+    return ccl, mep, tasa, cambio
+
+
 def analizar(ticker):
     try:
         info, precio, hist, reverse, dilucion, parcial = traer_datos(ticker)
@@ -427,7 +497,14 @@ def analizar(ticker):
     else:
         nota = None
 
+    tipo = {"ETF": "ETF", "EQUITY": "Acción"}.get(info.get("quoteType"), None)
+    try:
+        spx = serie("^GSPC")
+    except Exception:
+        spx = pd.Series(dtype=float)
+
     return {"ticker": ticker, "error": None, "info": info, "precio": precio, "hist": hist,
+            "tipo": tipo, "cedear": precio_cedear(ticker), "spx": spx,
             "metricas": metricas, "nota": nota, "n_validas": len(validas),
             "penalizacion": penalizacion, "chips": chips, "parcial": parcial}
 
@@ -508,6 +585,11 @@ def html_empresa(r):
     grid = "".join(f'<div class="stat"><div class="l">{l}</div><div class="v">{v}</div></div>'
                    for l, v in stats)
     t = r["ticker"]
+    etiquetas = ""
+    if r["tipo"]:
+        etiquetas += f'<span class="tag">{r["tipo"]}</span>'
+    if r["cedear"]:
+        etiquetas += '<span class="tag">Tiene CEDEAR</span>'
     links = (
         f'<div class="links">'
         f'<a href="https://finance.yahoo.com/quote/{e(t)}/key-statistics" target="_blank">'
@@ -517,7 +599,7 @@ def html_empresa(r):
     )
     return (
         f'<div class="empresa"><div><div class="titulo">{e(nombre)}'
-        f'<span class="tick">{e(t)}</span></div>'
+        f'<span class="tick">{e(t)}</span>{etiquetas}</div>'
         f'<div class="sub">{e(sub)}</div></div>{links}</div>'
         f'<div class="stats">{grid}</div>'
     )
@@ -567,13 +649,98 @@ def mostrar(r):
     st.markdown("".join(f'<span class="chip" style="--c:{c}">{e(t)}</span>'
                         for t, c in r["chips"]), unsafe_allow_html=True)
 
-    if len(r["hist"]) > 1:
-        st.markdown('<div class="seccion" style="margin-top:22px">Precio del último año (USD)</div>',
-                    unsafe_allow_html=True)
-        h = r["hist"]
-        st.markdown(f'<div class="fechas">Del {h.index[0]:%d/%m/%Y} al {h.index[-1]:%d/%m/%Y} '
-                    f"· {len(h)} ruedas</div>", unsafe_allow_html=True)
-        st.area_chart(h, height=240, color="#64748b")
+    bloque_cedear(r)
+    grafico(r)
+
+
+def bloque_cedear(r):
+    c = r["cedear"]
+    t = r["ticker"]
+    st.markdown('<div class="seccion" style="margin-top:22px">Si lo comprás como CEDEAR</div>',
+                unsafe_allow_html=True)
+    if not c:
+        st.caption("No encontré cotización de este CEDEAR en Yahoo. Puede que no exista, que "
+                   "tenga otro ticker en BYMA o que Yahoo no lo cubra.")
+        return
+
+    ratio = st.number_input(
+        f"Ratio del CEDEAR de {t} (cuántos CEDEARs = 1 acción)",
+        min_value=0.0, value=float(RATIOS.get(t, 0)), step=1.0, key=f"ratio_{t}",
+        help="Lo ves en el detalle del CEDEAR en Balanz o en el listado de Comafi. "
+             "Si figura 20:1, poné 20. Ojo que cambia con los splits.")
+
+    h = r["hist"]
+    precio_usa = float(h.iloc[-1]) if len(h) else r["precio"]
+    fecha_usa = h.index[-1].strftime("%d/%m/%Y") if len(h) else "hoy"
+    ccl = dolar("contadoconliqui")
+
+    base = (f'<div class="fila"><div>CEDEAR en BYMA<b>$ {fmt_num(c["precio"], 2)}</b>'
+            f'cierre {c["fecha"]}</div><div>Acción en EE.UU.<b>USD {fmt_num(precio_usa, 2)}</b>'
+            f'cierre {fecha_usa}</div>')
+
+    if not ratio:
+        st.markdown(f'<div class="ced" style="--c:{GRIS}">{base}</div>'
+                    f'<div style="font-size:14px;opacity:.75">Cargá el ratio para ver a qué '
+                    f"dólar estás comprando.</div></div>", unsafe_allow_html=True)
+        return
+
+    implicito = c["precio"] * ratio / precio_usa
+    fila_ccl = f'<div>CCL del mercado<b>$ {fmt_num(ccl, 2)}</b>DolarApi</div>' if ccl else ""
+    fila_imp = f'<div>Dólar implícito<b>$ {fmt_num(implicito, 2)}</b>precio × ratio / precio EE.UU.</div>'
+
+    if not ccl:
+        titulo, color = "No pude traer el CCL para comparar", GRIS
+    else:
+        prima = implicito / ccl - 1
+        if abs(prima) > 0.25:
+            titulo, color = ("El ratio parece incorrecto (¿cambió por un split?). "
+                             "Revisalo en tu broker."), ROJO
+        elif prima > 0.03:
+            titulo, color = f"Sobreprecio alto: pagás {fmt_pct(prima)} más que el CCL", ROJO
+        elif prima > 0.01:
+            titulo, color = f"Sobreprecio leve: pagás {fmt_pct(prima)} más que el CCL", AMARILLO
+        elif prima < -0.01:
+            titulo, color = (f"Descuento: pagás {fmt_pct(abs(prima))} menos que el CCL "
+                             "(chequeá que el precio no sea viejo)"), VERDE
+        else:
+            titulo, color = f"Precio en línea con el CCL ({fmt_pct(prima)})", VERDE
+
+    aviso = ""
+    if c["fecha"] != fecha_usa:
+        aviso = ('<div style="font-size:12px;opacity:.65;margin-top:8px">Los cierres son de '
+                 "días distintos: la comparación puede estar desfasada.</div>")
+    st.markdown(
+        f'<div class="ced" style="--c:{color}"><div class="grande">{e(titulo)}</div>'
+        f'{base}{fila_imp}{fila_ccl}</div>{aviso}'
+        f'<div style="font-size:12px;opacity:.65;margin-top:8px">Usa el último precio operado. '
+        f"Si el CEDEAR tiene poco volumen, mirá las puntas en tu broker antes de comprar.</div></div>",
+        unsafe_allow_html=True)
+
+
+def grafico(r):
+    h = r["hist"]
+    if len(h) < 2:
+        return
+    st.markdown('<div class="seccion" style="margin-top:22px">Último año contra el S&amp;P 500 '
+                "(base 100)</div>", unsafe_allow_html=True)
+    spx = r["spx"]
+    if len(spx) > 1:
+        df = pd.concat([h.rename(r["ticker"]), spx.rename("S&P 500")], axis=1).dropna()
+    else:
+        df = h.rename(r["ticker"]).to_frame()
+    df = df / df.iloc[0] * 100
+
+    var_t = df.iloc[-1, 0] / 100 - 1
+    texto = f"Del {df.index[0]:%d/%m/%Y} al {df.index[-1]:%d/%m/%Y} · {r['ticker']} {fmt_pct(var_t)}"
+    if df.shape[1] > 1:
+        var_s = df.iloc[-1, 1] / 100 - 1
+        dif = (var_t - var_s) * 100
+        lado = "arriba" if dif >= 0 else "abajo"
+        texto += (f" vs S&amp;P {fmt_pct(var_s)} → quedó {fmt_num(abs(dif))} puntos {lado} "
+                  "del índice")
+    st.markdown(f'<div class="fechas">{texto}</div>', unsafe_allow_html=True)
+    colores = ["#52627a", "#bf9a3e"][: df.shape[1]]
+    st.line_chart(df, height=260, color=colores)
 
 
 # ---------------------------------------------------------------------------
@@ -583,6 +750,21 @@ st.markdown(
     '<div class="hero"><h1>📊 Analizador de acciones</h1>'
     "<p>Escribí uno o más tickers de EE.UU. separados por coma (MELI, no MELI.BA). "
     "Datos de Yahoo Finance: orientativos, verificá antes de decidir.</p></div>",
+    unsafe_allow_html=True,
+)
+
+ccl, mep, tasa, cambio_tasa = contexto_mercado()
+tasa_det = (f"{'+' if cambio_tasa >= 0 else ''}{fmt_num(cambio_tasa, 2)} pp en el día"
+            if cambio_tasa is not None else "")
+franja = [
+    ("Dólar CCL", f"$ {fmt_num(ccl, 2)}" if ccl else "s/d", "Para comprar CEDEARs"),
+    ("Dólar MEP", f"$ {fmt_num(mep, 2)}" if mep else "s/d", "Para dolarizar pesos"),
+    ("Treasury 10 años", f"{fmt_num(tasa, 2)}%" if tasa is not None else "s/d", tasa_det),
+]
+st.markdown(
+    '<div class="franja">' + "".join(
+        f'<div class="stat"><div class="l">{l}</div><div class="v">{v}</div><div class="d">{d}</div></div>'
+        for l, v, d in franja) + "</div>",
     unsafe_allow_html=True,
 )
 
