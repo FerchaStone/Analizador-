@@ -1,6 +1,8 @@
+
+App · PY
 """
 Analizador de acciones - dashboard (Streamlit)
-
+ 
 Se escribe uno o mas tickers de EE.UU. y muestra, para cada uno:
 - una nota de 0 a 10 con anillo de color
 - 6 indicadores ordenados por importancia, con valor, calificacion en palabras,
@@ -8,10 +10,10 @@ Se escribe uno o mas tickers de EE.UU. y muestra, para cada uno:
 - chequeos de riesgo (reverse splits, dilucion, caja)
 - grafico de precio del ultimo anio
 - si hay varios tickers, una tabla comparativa arriba
-
+ 
 Datos: Yahoo Finance via yfinance. Son orientativos: verificar antes de decidir.
 """
-
+ 
 import html
 import io
 import json
@@ -19,25 +21,25 @@ import re
 import time
 import urllib.request
 from datetime import datetime, time as dtime, timedelta, timezone
-
+ 
 import pandas as pd
 import streamlit as st
 import yfinance as yf
-
+ 
 st.set_page_config(page_title="Analizador de acciones", page_icon="📊", layout="wide")
-
+ 
 # Los ratios de CEDEAR se bajan solos del listado oficial de Comafi (una vez por dia).
 # Solo hace falta cargar aca los que Comafi no publica (por ejemplo, CEDEARs emitidos
 # por Caja de Valores) o si queres forzar uno. Formato: RATIOS = {"GLD": 50}
 # (ese numero es solo un ejemplo de formato, no un dato real).
 RATIOS = {}
-
+ 
 COMAFI_PAGINA = "https://www.comafi.com.ar/custodiaglobal/programas.aspx"
-
+ 
 # Supuestos del "crecimiento que descuenta el precio" (tarjeta de valuacion).
 TASA_DESCUENTO = 0.10  # rendimiento anual pedido: Treasury ~5% + prima de riesgo ~5%
 PER_SALIDA = 18        # PER al que se supone que cotiza dentro de 5 anios
-
+ 
 # ---------------------------------------------------------------------------
 # Estilo
 # ---------------------------------------------------------------------------
@@ -47,12 +49,12 @@ st.markdown(
 html, body, [class*="css"], .stMarkdown, .stTextInput, button {font-family: 'Inter', sans-serif !important;}
 #MainMenu, footer, [data-testid="stToolbar"], [data-testid="stDecoration"] {visibility: hidden;}
 .block-container {padding-top: 1.5rem; max-width: 1180px;}
-
+ 
 .hero {background: linear-gradient(135deg, #1f2937 0%, #334155 100%);
   border-radius: 18px; padding: 26px 30px; color: #fff; margin-bottom: 18px;}
 .hero h1 {font-size: 34px; font-weight: 800; margin: 0; color: #fff; padding: 0;}
 .hero p {margin: 6px 0 0; opacity: .85; font-size: 15px;}
-
+ 
 div[data-testid="stForm"] {border: none; padding: 0;}
 .stTextInput input {border-radius: 12px !important; font-size: 16px !important; padding: 12px 14px !important;}
 div[data-testid="stFormSubmitButton"] button {width: 100%; min-width: 110px; border-radius: 12px;
@@ -60,19 +62,19 @@ div[data-testid="stFormSubmitButton"] button {width: 100%; min-width: 110px; bor
   white-space: nowrap; transition: background .15s;}
 div[data-testid="stFormSubmitButton"] button:hover {background: #1f2937; color: #fff;}
 div[data-testid="stFormSubmitButton"] button p {white-space: nowrap;}
-
+ 
 .empresa {display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;
   gap: 18px; margin: 10px 0 18px;}
 .empresa .titulo {font-size: 28px; font-weight: 800; line-height: 1.15;}
 .empresa .sub {opacity: .65; font-size: 14px; margin-top: 4px;}
 .tick {display:inline-block; background: rgba(82,98,122,.12); color: #52627a; border-radius: 8px;
   padding: 2px 10px; font-size: 14px; font-weight: 700; margin-left: 8px; vertical-align: middle;}
-
+ 
 .stats {display:grid; grid-template-columns: repeat(auto-fit, minmax(150px,1fr)); gap: 12px; margin-bottom: 18px;}
 .stat {background: rgba(128,128,128,.07); border-radius: 14px; padding: 14px 16px;}
 .stat .l {font-size: 12px; opacity: .6; text-transform: uppercase; letter-spacing: .05em;}
 .stat .v {font-size: 22px; font-weight: 700; margin-top: 4px;}
-
+ 
 .notabox {display:flex; align-items:center; gap: 26px; flex-wrap: wrap; border-radius: 18px;
   padding: 20px 24px; background: rgba(128,128,128,.07); margin-bottom: 20px;
   border: 1px solid rgba(128,128,128,.15);}
@@ -86,7 +88,7 @@ div[data-testid="stFormSubmitButton"] button p {white-space: nowrap;}
 .anillo .n small {font-size: 12px; opacity: .6; font-weight: 600; margin-top: 4px; color: inherit;}
 .notabox .et {font-size: 22px; font-weight: 800; color: var(--c);}
 .notabox .ex {opacity: .7; font-size: 14px; margin-top: 6px; max-width: 620px;}
-
+ 
 .tarjeta {background: rgba(128,128,128,.07); border-radius: 16px; padding: 18px 18px 16px;
   border: 1px solid rgba(128,128,128,.14); border-top: 3px solid var(--c);
   margin-bottom: 16px; min-height: 300px; transition: transform .15s, box-shadow .15s;}
@@ -102,13 +104,13 @@ div[data-testid="stFormSubmitButton"] button p {white-space: nowrap;}
 .barra div {height: 100%; border-radius: 99px; background: var(--c);}
 .frase {font-size: 14px; margin-top: 10px; line-height: 1.45;}
 .escala {font-size: 11.5px; opacity: .6; margin-top: 10px; line-height: 1.4;}
-
+ 
 .seccion {font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
   opacity: .6; margin: 10px 0 8px;}
 .chip {display:inline-block; border-radius: 999px; padding: 6px 14px; margin: 4px 6px 4px 0;
   font-size: 13px; font-weight: 600; color: var(--c); background: color-mix(in srgb, var(--c) 14%, transparent);
   border: 1px solid color-mix(in srgb, var(--c) 35%, transparent);}
-
+ 
 .tabla {width:100%; border-collapse: separate; border-spacing: 0 6px; font-size: 14px;}
 .tabla th {text-align:left; font-size: 11.5px; text-transform: uppercase; letter-spacing: .05em;
   opacity: .6; font-weight: 600; padding: 4px 10px;}
@@ -138,7 +140,7 @@ div[data-testid="stFormSubmitButton"] button p {white-space: nowrap;}
 </style>""",
     unsafe_allow_html=True,
 )
-
+ 
 # ---------------------------------------------------------------------------
 # Colores y utilidades
 # ---------------------------------------------------------------------------
@@ -151,10 +153,10 @@ ROJO = "#b5524e"
 GRIS = "#8a8f98"
 ACENTO = "#52627a"
 INF = float("inf")
-
+ 
 SECTORES_FINANCIEROS = {"Financial Services", "Financial"}
-
-
+ 
+ 
 def num(x):
     try:
         if x is None:
@@ -163,21 +165,21 @@ def num(x):
         return None if pd.isna(v) else v
     except (TypeError, ValueError):
         return None
-
-
+ 
+ 
 def fmt_num(x, dec=1):
     s = f"{x:,.{dec}f}"
     return s.replace(",", "X").replace(".", ",").replace("X", ".")
-
-
+ 
+ 
 def fmt_pct(x, dec=1):
     return fmt_num(x * 100, dec) + "%"
-
-
+ 
+ 
 def fmt_x(x):
     return fmt_num(x, 1) + "x"
-
-
+ 
+ 
 def escalon(v, tramos):
     """tramos: lista de (limite_superior, etiqueta, puntos, color). Usa el primero con v < limite."""
     for limite, etiqueta, puntos, color in tramos:
@@ -185,18 +187,18 @@ def escalon(v, tramos):
             return etiqueta, puntos, color
     _, etiqueta, puntos, color = tramos[-1]
     return etiqueta, puntos, color
-
-
+ 
+ 
 def resultado(base, valor, etiqueta, puntos, color, frase):
     return {**base, "valor": valor, "etiqueta": etiqueta, "puntos": puntos,
             "color": color, "frase": frase}
-
-
+ 
+ 
 def sin_dato(base):
     return resultado(base, "s/d", "Sin dato", None, GRIS,
                      "Yahoo no informa este dato para esta empresa.")
-
-
+ 
+ 
 # ---------------------------------------------------------------------------
 # Los 6 indicadores, en orden de importancia
 # ---------------------------------------------------------------------------
@@ -215,27 +217,50 @@ def m_margen(info):
     else:
         frase = f"De cada USD 100 que vende, le quedan USD {fmt_num(v * 100)} de ganancia."
     return resultado(base, fmt_pct(v), et, p, c, frase)
-
-
+ 
+ 
+TRAMOS_CRECIMIENTO = [(0, "Malo", 0, ROJO), (0.05, "Flojo", 3, NARANJA),
+                      (0.10, "Aceptable", 5, AMARILLO), (0.20, "Bueno", 7, VERDE_CLARO),
+                      (0.40, "Muy bueno", 9, VERDE), (INF, "Excelente", 10, VERDE_OSC)]
+ 
+ 
 def m_crecimiento(info):
-    base = {"nombre": "Crecimiento de ventas (último trimestre)", "icono": "📈", "corto": "Crecimiento", "peso": 15,
+    base = {"nombre": "Crecimiento: ventas y BPA", "icono": "📈", "corto": "Crecimiento",
+            "peso": 15,
             "escala": "Negativo: malo · 0-5%: flojo · 5-10%: aceptable · 10-20%: bueno · "
-                      "20-40%: muy bueno · +40%: excelente"}
-    v = num(info.get("revenueGrowth"))
-    if v is None:
+                      "20-40%: muy bueno · +40%: excelente. Último trimestre contra el mismo "
+                      "del año anterior. BPA = ganancia por acción: es lo que te llega a vos."}
+    ventas = num(info.get("revenueGrowth"))
+    bpa = num(info.get("earningsGrowth"))
+    if ventas is None and bpa is None:
         return sin_dato(base)
-    et, p, c = escalon(v, [(0, "Malo", 0, ROJO), (0.05, "Flojo", 3, NARANJA),
-                           (0.10, "Aceptable", 5, AMARILLO), (0.20, "Bueno", 7, VERDE_CLARO),
-                           (0.40, "Muy bueno", 9, VERDE), (INF, "Excelente", 10, VERDE_OSC)])
-    if v < 0:
-        frase = (f"En el último trimestre vendió {fmt_pct(abs(v))} menos que en el mismo "
-                 "trimestre del año anterior.")
+ 
+    puntajes = []
+    for v in (ventas, bpa):
+        if v is not None:
+            puntajes.append(escalon(v, TRAMOS_CRECIMIENTO))
+    # Manda el BPA si esta: es lo que termina en el bolsillo del accionista
+    et, p, c = puntajes[-1] if bpa is not None else puntajes[0]
+    if len(puntajes) == 2:
+        p = round((puntajes[0][1] + puntajes[1][1] * 2) / 3)
+ 
+    if ventas is None:
+        valor, frase = fmt_pct(bpa), f"Su ganancia por acción creció {fmt_pct(bpa)}."
+    elif bpa is None:
+        valor = fmt_pct(ventas)
+        frase = (f"Vendió {fmt_pct(ventas)} más que un año antes. No hay dato de ganancia "
+                 "por acción, que es lo que realmente le llega al accionista.")
     else:
-        frase = (f"En el último trimestre vendió {fmt_pct(v)} más que en el mismo "
-                 "trimestre del año anterior.")
-    return resultado(base, fmt_pct(v), et, p, c, frase)
-
-
+        valor = f"{fmt_pct(ventas)} / {fmt_pct(bpa)}"
+        frase = f"Ventas {fmt_pct(ventas)} y ganancia por acción {fmt_pct(bpa)}."
+        if bpa < ventas - 0.10:
+            frase += (" La ganancia por acción crece bastante menos que las ventas: "
+                      "parte del crecimiento se lo comen los costos o la emisión de acciones.")
+        elif bpa > ventas + 0.10:
+            frase += " La ganancia por acción crece más rápido que las ventas: buena señal."
+    return resultado(base, valor, et, p, c, frase)
+ 
+ 
 def m_valuacion(info):
     base = {"nombre": "Valuación (PER)", "icono": "🏷️", "corto": "Valuación", "peso": 20,
             "escala": "-10x: muy barato (ojo trampas) · 10-15x: barato · 15-22x: razonable · "
@@ -257,7 +282,7 @@ def m_valuacion(info):
     frase = f"Pagás {fmt_num(pe, 0)} años de ganancias {tipo}."
     if pe < 10:
         frase += " Tan bajo a veces significa que el mercado espera problemas."
-
+ 
     # Crecimiento que descuenta el precio (DCF inverso simple, a 5 anios).
     # El dividendo cubre parte del rendimiento pedido, asi que se descuenta de la tasa.
     precio = num(info.get("currentPrice")) or num(info.get("regularMarketPrice"))
@@ -271,8 +296,8 @@ def m_valuacion(info):
     if crec is not None:
         frase += f" Hoy sus ventas crecen {fmt_pct(crec, 0)}."
     return resultado(base, fmt_x(pe), et, p, c, frase)
-
-
+ 
+ 
 def m_deuda(info):
     base = {"nombre": "Deuda / Patrimonio", "icono": "🏦", "corto": "Deuda", "peso": 10,
             "escala": "-0,3x: excelente · 0,3-0,7x: muy bueno · 0,7-1,2x: bueno · "
@@ -294,8 +319,50 @@ def m_deuda(info):
                             (3, "Flojo", 3, NARANJA), (INF, "Alto", 1, ROJO)])
     frase = f"Debe USD {fmt_num(de, 2)} por cada USD 1 de patrimonio."
     return resultado(base, fmt_x(de), et, p, c, frase)
-
-
+ 
+ 
+def calcular_roic(fin, bal):
+    """ROIC = ganancia operativa despues de impuestos / capital invertido."""
+    ebit = fila(fin, ["EBIT", "Operating Income"], 0)
+    impuesto = fila(fin, ["Tax Provision"], 0)
+    antes = fila(fin, ["Pretax Income"], 0)
+    deuda = fila(bal, ["Total Debt"], 0)
+    if deuda is None:
+        largo = fila(bal, ["Long Term Debt", "Long Term Debt And Capital Lease Obligation"], 0)
+        corto = fila(bal, ["Current Debt", "Current Debt And Capital Lease Obligation"], 0)
+        deuda = (largo or 0) + (corto or 0)
+    patrimonio = fila(bal, ["Stockholders Equity", "Total Equity Gross Minority Interest"], 0)
+    caja = fila(bal, ["Cash And Cash Equivalents",
+                      "Cash Cash Equivalents And Short Term Investments"], 0)
+    if ebit is None or patrimonio is None:
+        return None
+    tasa = impuesto / antes if (impuesto is not None and antes) else 0.25
+    tasa = min(max(tasa, 0.0), 0.5)
+    capital = (deuda or 0) + patrimonio - (caja or 0)
+    if capital <= 0:
+        return None
+    return ebit * (1 - tasa) / capital
+ 
+ 
+def m_roic(roic, info):
+    base = {"nombre": "ROIC (retorno sobre el capital)", "icono": "⚙️", "corto": "ROIC",
+            "peso": 10,
+            "escala": "Negativo: malo · 0-5%: flojo · 5-10%: aceptable · 10-15%: bueno · "
+                      "15-25%: muy bueno · +25%: excelente. A diferencia del ROE, no se "
+                      "infla con recompras ni con deuda."}
+    if info.get("sector") in SECTORES_FINANCIEROS:
+        return resultado(base, "—", "No aplica", None, GRIS,
+                         "En bancos no se mide así: su negocio es justamente tomar y prestar.")
+    if roic is None:
+        return m_roe(info)
+    et, p, c = escalon(roic, [(0, "Malo", 0, ROJO), (0.05, "Flojo", 3, NARANJA),
+                              (0.10, "Aceptable", 5, AMARILLO), (0.15, "Bueno", 7, VERDE_CLARO),
+                              (0.25, "Muy bueno", 9, VERDE), (INF, "Excelente", 10, VERDE_OSC)])
+    frase = (f"Por cada USD 100 de capital que usa el negocio (deuda + patrimonio), "
+             f"genera USD {fmt_num(roic * 100)} al año después de impuestos.")
+    return resultado(base, fmt_pct(roic), et, p, c, frase)
+ 
+ 
 def m_roe(info):
     base = {"nombre": "ROE (retorno sobre capital)", "icono": "⚙️", "corto": "ROE", "peso": 10,
             "escala": "Negativo: malo · 0-8%: flojo · 8-15%: aceptable · 15-20%: bueno · "
@@ -312,8 +379,8 @@ def m_roe(info):
                            (0.30, "Muy bueno", 9, VERDE), (INF, "Excelente", 10, VERDE_OSC)])
     frase = f"Por cada USD 100 de los accionistas, genera USD {fmt_num(v * 100)} por año."
     return resultado(base, fmt_pct(v), et, p, c, frase)
-
-
+ 
+ 
 def m_dividendo(info, precio):
     base = {"nombre": "Dividendo", "icono": "💵", "corto": "Dividendo", "peso": 5,
             "escala": "Se evalúa el payout (qué parte de la ganancia reparte): -50%: muy "
@@ -335,8 +402,8 @@ def m_dividendo(info, precio):
     if payout >= 0.9:
         frase += " Si la ganancia baja, lo más probable es que lo recorten."
     return resultado(base, fmt_pct(y), et, p, c, frase)
-
-
+ 
+ 
 # ---------------------------------------------------------------------------
 # Chequeos de riesgo
 # ---------------------------------------------------------------------------
@@ -357,8 +424,8 @@ def m_fscore(fs, info):
     frase = f"Pasa {ok} de {total} pruebas de salud: rentabilidad, deuda y eficiencia, año contra año."
     valor = f"{ok}/{total}"
     return {**resultado(base, valor, et, p, c, frase), "pruebas": fs["pruebas"]}
-
-
+ 
+ 
 def chequeos(info, reverse_splits, dilucion, z=None):
     chips = []
     if z is not None and info.get("sector") not in SECTORES_FINANCIEROS:
@@ -374,7 +441,7 @@ def chequeos(info, reverse_splits, dilucion, z=None):
         chips.append(("Sin reverse splits en 5 años", VERDE))
     else:
         chips.append((f"{reverse_splits} reverse split(s) en 5 años", ROJO))
-
+ 
     if dilucion is None:
         chips.append(("Dilución: sin dato", GRIS))
     elif dilucion < -0.005:
@@ -385,7 +452,7 @@ def chequeos(info, reverse_splits, dilucion, z=None):
         chips.append((f"Dilución moderada ({fmt_pct(dilucion)}/año)", AMARILLO))
     else:
         chips.append((f"Dilución alta ({fmt_pct(dilucion)}/año)", ROJO))
-
+ 
     fcf = num(info.get("freeCashflow"))
     caja = num(info.get("totalCash"))
     if fcf is None:
@@ -400,8 +467,8 @@ def chequeos(info, reverse_splits, dilucion, z=None):
         else:
             chips.append(("Quema caja", ROJO))
     return chips
-
-
+ 
+ 
 # ---------------------------------------------------------------------------
 # Datos
 # ---------------------------------------------------------------------------
@@ -415,22 +482,22 @@ def con_reintentos(fn, intentos=3):
             ultimo = e
             time.sleep(1.5 * (i + 1))
     raise ultimo
-
-
+ 
+ 
 # Cada pedido a Yahoo se guarda por separado y solo si salio bien: asi un corte
 # momentaneo no queda "pegado" una hora, y los datos que cambian poco (balances,
 # splits) no se vuelven a pedir en cada analisis, lo que evita el limite de consultas.
 DATOS_CLAVE = ("profitMargins", "revenueGrowth", "forwardPE", "trailingPE")
-
-
+ 
+ 
 @st.cache_data(ttl=3600, show_spinner=False)
 def yahoo_info(ticker):
     info = dict(con_reintentos(lambda: yf.Ticker(ticker).info) or {})
     if not any(info.get(k) is not None for k in DATOS_CLAVE):
         raise ValueError("Yahoo devolvió la ficha vacía")
     return info
-
-
+ 
+ 
 @st.cache_data(ttl=3600, show_spinner=False)
 def yahoo_historia(ticker):
     h = con_reintentos(lambda: yf.Ticker(ticker).history(period="1y"))["Close"].dropna()
@@ -438,8 +505,8 @@ def yahoo_historia(ticker):
         raise ValueError("Sin historial de precios")
     h.index = h.index.tz_localize(None)
     return h
-
-
+ 
+ 
 @st.cache_data(ttl=24 * 3600, show_spinner=False)
 def yahoo_splits_y_dilucion(ticker):
     tk = yf.Ticker(ticker)
@@ -459,8 +526,8 @@ def yahoo_splits_y_dilucion(ticker):
     except Exception:
         dilucion = None
     return reverse, dilucion
-
-
+ 
+ 
 @st.cache_data(ttl=24 * 3600, show_spinner=False)
 def yahoo_balances(ticker):
     tk = yf.Ticker(ticker)
@@ -470,8 +537,8 @@ def yahoo_balances(ticker):
     if fin is None or fin.empty or bal is None or bal.empty:
         raise ValueError("Sin balances")
     return fin, bal, caja
-
-
+ 
+ 
 def traer_datos(ticker):
     """Arma todo con lo que se pueda conseguir. Lanza excepcion si no hay ni precio."""
     info, detalle = {}, ""
@@ -479,12 +546,12 @@ def traer_datos(ticker):
         info = yahoo_info(ticker)
     except Exception as e:
         detalle = f"{type(e).__name__}: {e}"
-
+ 
     try:
         hist = yahoo_historia(ticker)
     except Exception:
         hist = pd.Series(dtype=float)
-
+ 
     precio = num(info.get("currentPrice")) or num(info.get("regularMarketPrice"))
     if precio is None and len(hist):
         precio = float(hist.iloc[-1])
@@ -495,25 +562,26 @@ def traer_datos(ticker):
             + (f" Detalle técnico: {detalle}" if detalle else "")
         )
     parcial = not info
-
+ 
     try:
         reverse, dilucion = yahoo_splits_y_dilucion(ticker)
     except Exception:
         reverse, dilucion = None, None
-
+ 
     try:
         fin, bal, caja = yahoo_balances(ticker)
         fscore = calcular_fscore(fin, bal, caja)
         zscore = calcular_zscore(fin, bal, info) if info else None
+        roic = calcular_roic(fin, bal)
     except Exception:
-        fscore, zscore = None, None
-
-    return info, precio, hist, reverse, dilucion, parcial, fscore, zscore, detalle
-
-
+        fscore, zscore, roic = None, None, None
+ 
+    return info, precio, hist, reverse, dilucion, parcial, fscore, zscore, roic, detalle
+ 
+ 
 ARGENTINA = timezone(timedelta(hours=-3))
-
-
+ 
+ 
 def hora_arg(texto):
     """Convierte la fecha ISO de DolarApi a hora argentina legible."""
     try:
@@ -527,8 +595,8 @@ def hora_arg(texto):
         return f"{dt:%d/%m %H:%M}"
     except Exception:
         return None
-
-
+ 
+ 
 def fila(df, nombres, col):
     """Valor de la primera fila que exista, en la columna col (0 = ultimo anio)."""
     if df is None or getattr(df, "empty", True) or df.shape[1] <= col:
@@ -537,8 +605,8 @@ def fila(df, nombres, col):
         if n in df.index:
             return num(df.loc[n].iloc[col])
     return None
-
-
+ 
+ 
 def calcular_fscore(fin, bal, caja):
     """Piotroski F-Score con los dos ultimos balances anuales. Omite las pruebas sin datos."""
     NI = ["Net Income", "Net Income Common Stockholders"]
@@ -549,13 +617,13 @@ def calcular_fscore(fin, bal, caja):
     SH = ["Ordinary Shares Number", "Share Issued"]
     REV = ["Total Revenue", "Operating Revenue"]
     GP = ["Gross Profit"]
-
+ 
     def g(df, n, c):
         return fila(df, n, c)
-
+ 
     def div(a, b):
         return a / b if a is not None and b not in (None, 0) else None
-
+ 
     ni0, ni1 = g(fin, NI, 0), g(fin, NI, 1)
     ta0, ta1 = g(bal, TA, 0), g(bal, TA, 1)
     cfo0 = g(caja, CFO, 0)
@@ -566,7 +634,7 @@ def calcular_fscore(fin, bal, caja):
     rev0, rev1 = g(fin, REV, 0), g(fin, REV, 1)
     gm0, gm1 = div(g(fin, GP, 0), rev0), div(g(fin, GP, 1), rev1)
     at0, at1 = div(rev0, ta0), div(rev1, ta1)
-
+ 
     candidatas = [
         ("Gana plata (resultado positivo)", None if roa0 is None else roa0 > 0),
         ("Genera caja operativa", None if cfo0 is None else cfo0 > 0),
@@ -584,8 +652,8 @@ def calcular_fscore(fin, bal, caja):
     if not pruebas:
         return None
     return {"ok": sum(1 for _, r in pruebas if r), "total": len(pruebas), "pruebas": pruebas}
-
-
+ 
+ 
 def calcular_zscore(fin, bal, info):
     """Altman Z-Score original (1968), con el ultimo balance anual."""
     ta = fila(bal, ["Total Assets"], 0)
@@ -602,8 +670,8 @@ def calcular_zscore(fin, bal, info):
         return None
     return (1.2 * wc / ta + 1.4 * re_ / ta + 3.3 * ebit / ta
             + 0.6 * mcap / pasivo + 1.0 * ventas / ta)
-
-
+ 
+ 
 @st.cache_data(ttl=600, show_spinner=False)
 def dolar(tipo):
     """(venta, hora de actualizacion) desde DolarApi. tipo: 'contadoconliqui' o 'bolsa' (MEP)."""
@@ -619,14 +687,14 @@ def dolar(tipo):
         except Exception:
             continue
     return None, None
-
-
+ 
+ 
 def bajar(url, timeout=15):
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.read()
-
-
+ 
+ 
 def leer_ratio(v):
     """Convierte '120:1', 120 o una celda que Excel tomo como hora (3:1 -> 03:01) en numero."""
     if v is None or (isinstance(v, float) and pd.isna(v)):
@@ -647,8 +715,8 @@ def leer_ratio(v):
         b = float(m.group(2).replace(",", "."))
         return a / b if b else None
     return None
-
-
+ 
+ 
 def ratios_de_planilla(contenido):
     ratios = {}
     hojas = pd.read_excel(io.BytesIO(contenido), sheet_name=None, header=None)
@@ -669,8 +737,8 @@ def ratios_de_planilla(contenido):
             if isinstance(tick, str) and tick.strip() and ratio:
                 ratios[tick.strip().upper()] = ratio
     return ratios
-
-
+ 
+ 
 @st.cache_data(ttl=24 * 3600, show_spinner=False)
 def ratios_comafi():
     """Ratios oficiales de Comafi. Lanza excepcion si falla (no queda cacheado)."""
@@ -687,8 +755,8 @@ def ratios_comafi():
     if not ratios:
         raise ValueError("No se pudieron leer los ratios de Comafi")
     return {"ratios": ratios, "fecha": datetime.now(timezone(timedelta(hours=-3))).strftime("%d/%m")}
-
-
+ 
+ 
 def ratio_oficial(ticker):
     """(ratio, origen) buscando primero en RATIOS y despues en Comafi."""
     for t in (ticker, ticker.replace("-", ""), ticker.replace("-", ".")):
@@ -702,8 +770,8 @@ def ratio_oficial(ticker):
         if t in datos["ratios"]:
             return datos["ratios"][t], f"el listado oficial de Comafi, bajado el {datos['fecha']}"
     return None, None
-
-
+ 
+ 
 @st.cache_data(ttl=600, show_spinner=False)
 def serie(simbolo, periodo="1y"):
     """Serie de cierres. Lanza excepcion si falla (no queda cacheada)."""
@@ -712,8 +780,8 @@ def serie(simbolo, periodo="1y"):
         raise ValueError(f"Sin datos para {simbolo}")
     h.index = h.index.tz_localize(None)
     return h
-
-
+ 
+ 
 @st.cache_data(ttl=900, show_spinner=False)
 def precio_cedear(ticker):
     """Ultimo cierre del CEDEAR en Buenos Aires (Yahoo, simbolo .BA). None si no lo encuentra."""
@@ -726,8 +794,8 @@ def precio_cedear(ticker):
         except Exception:
             continue
     return None
-
-
+ 
+ 
 def contexto_mercado():
     ccl, ccl_hora = dolar("contadoconliqui")
     mep, mep_hora = dolar("bolsa")
@@ -740,21 +808,22 @@ def contexto_mercado():
         tasa, cambio, tasa_fecha = None, None, None
     return {"ccl": ccl, "ccl_hora": ccl_hora, "mep": mep, "mep_hora": mep_hora,
             "tasa": tasa, "cambio": cambio, "tasa_fecha": tasa_fecha}
-
-
+ 
+ 
 def analizar(ticker):
     try:
-        info, precio, hist, reverse, dilucion, parcial, fscore, zscore, detalle = traer_datos(ticker)
+        (info, precio, hist, reverse, dilucion, parcial, fscore, zscore, roic,
+         detalle) = traer_datos(ticker)
     except Exception as e:
         return {"ticker": ticker, "error": str(e)}
-
+ 
     # Orden = peso en la nota (de mayor a menor)
     metricas = [m_margen(info), m_valuacion(info), m_crecimiento(info), m_fscore(fscore, info),
-                m_deuda(info), m_roe(info), m_dividendo(info, precio)]
+                m_deuda(info), m_roic(roic, info), m_dividendo(info, precio)]
     validas = [m for m in metricas if m["puntos"] is not None]
     chips = chequeos(info, reverse, dilucion, zscore)
     minimo = 4  # con menos indicadores que esto, la nota no es representativa
-
+ 
     # Penalizacion por riesgos: cada alerta roja resta 1,5 y cada amarilla 0,5
     penalizacion = sum(1.5 if c == ROJO else 0.5 if c == AMARILLO else 0 for _, c in chips)
     if len(validas) >= minimo and not parcial:
@@ -762,20 +831,20 @@ def analizar(ticker):
         nota = max(0.0, base - penalizacion)
     else:
         nota = None
-
+ 
     tipo = {"ETF": "ETF", "EQUITY": "Acción"}.get(info.get("quoteType"), None)
     try:
         spx = serie("^GSPC")
     except Exception:
         spx = pd.Series(dtype=float)
-
+ 
     return {"ticker": ticker, "error": None, "info": info, "precio": precio, "hist": hist,
             "tipo": tipo, "cedear": precio_cedear(ticker), "spx": spx,
             "metricas": metricas, "nota": nota, "n_validas": len(validas),
             "penalizacion": penalizacion, "chips": chips, "parcial": parcial,
             "detalle": detalle, "minimo": minimo}
-
-
+ 
+ 
 def calificacion_global(nota):
     if nota is None:
         return "Sin datos suficientes", GRIS
@@ -785,15 +854,15 @@ def calificacion_global(nota):
                                         (8, "Buenos fundamentos", 0, VERDE),
                                         (INF, "Fundamentos sólidos", 0, VERDE_OSC)])
     return etiqueta, color
-
-
+ 
+ 
 # ---------------------------------------------------------------------------
 # Render
 # ---------------------------------------------------------------------------
 def e(x):
     return html.escape(str(x))
-
-
+ 
+ 
 def html_tarjeta(m, rank):
     barra = ""
     if m["puntos"] is not None:
@@ -809,8 +878,8 @@ def html_tarjeta(m, rank):
         f'<div class="escala">{e(m["escala"])}</div>'
         f"</div>"
     )
-
-
+ 
+ 
 def html_nota(r):
     etiqueta, color = calificacion_global(r["nota"])
     total = len(r["metricas"])
@@ -830,15 +899,15 @@ def html_nota(r):
         f'<div><div class="et">{e(etiqueta)}</div>'
         f'<div class="ex">{e(explicacion)}</div></div></div>'
     )
-
-
+ 
+ 
 def html_empresa(r):
     info, hist = r["info"], r["hist"]
     nombre = info.get("shortName") or info.get("longName") or r["ticker"]
     sector = info.get("sector") or "Sector s/d"
     industria = info.get("industry")
     sub = sector + (f" · {industria}" if industria else "")
-
+ 
     mcap = num(info.get("marketCap"))
     mcap_txt = f"USD {fmt_num(mcap / 1e9, 1)} mil MM" if mcap else "s/d"
     if len(hist) > 1:
@@ -850,7 +919,7 @@ def html_empresa(r):
         var_txt = "s/d"
     maximo = num(info.get("fiftyTwoWeekHigh"))
     desde_max = (f"{fmt_pct(r['precio'] / maximo - 1)}" if maximo else "s/d")
-
+ 
     stats = [("Precio", f"USD {fmt_num(r['precio'], 2)}"), ("Tamaño", mcap_txt),
              ("Último año", var_txt), ("Desde el máximo", desde_max)]
     grid = "".join(f'<div class="stat"><div class="l">{l}</div><div class="v">{v}</div></div>'
@@ -874,8 +943,8 @@ def html_empresa(r):
         f'<div class="sub">{e(sub)}</div></div>{links}</div>'
         f'<div class="stats">{grid}</div>'
     )
-
-
+ 
+ 
 def html_comparativa(resultados):
     validos = [r for r in resultados if not r["error"]]
     if len(validos) < 2:
@@ -894,13 +963,13 @@ def html_comparativa(resultados):
                   f'<td><span class="pill" style="--c:{color}">{n}</span></td>{celdas}</tr>')
     return (f'<div class="seccion">Comparativa (ordenada por nota)</div>'
             f'<div class="tabla-wrap"><table class="tabla">{cab}{filas}</table></div>')
-
-
+ 
+ 
 def mostrar(r):
     if r["error"]:
         st.error(f"**{r['ticker']}** — {r['error']}")
         return
-
+ 
     st.markdown(html_empresa(r), unsafe_allow_html=True)
     if r["parcial"]:
         st.warning("Yahoo devolvió el precio pero no la ficha de la empresa (suele ser un límite "
@@ -908,7 +977,7 @@ def mostrar(r):
                    "no hace falta tocar Actualizar."
                    + (f"\n\nDetalle técnico: `{r['detalle']}`" if r.get("detalle") else ""))
     st.markdown(html_nota(r), unsafe_allow_html=True)
-
+ 
     st.markdown('<div class="seccion">Indicadores, de más a menos importante</div>',
                 unsafe_allow_html=True)
     n = len(r["metricas"])
@@ -919,20 +988,20 @@ def mostrar(r):
             if i < n:
                 with cols[j]:
                     st.markdown(html_tarjeta(r["metricas"][i], i + 1), unsafe_allow_html=True)
-
+ 
     fs = next((m for m in r["metricas"] if m.get("pruebas")), None)
     if fs:
         with st.expander(f"Ver las pruebas del F-Score ({fs['valor']})"):
             st.markdown("\n".join(f"- {'✅' if ok else '❌'} {t}" for t, ok in fs["pruebas"]))
-
+ 
     st.markdown('<div class="seccion">Chequeos de riesgo</div>', unsafe_allow_html=True)
     st.markdown("".join(f'<span class="chip" style="--c:{c}">{e(t)}</span>'
                         for t, c in r["chips"]), unsafe_allow_html=True)
-
+ 
     bloque_cedear(r)
     grafico(r)
-
-
+ 
+ 
 def bloque_cedear(r):
     c = r["cedear"]
     t = r["ticker"]
@@ -942,12 +1011,12 @@ def bloque_cedear(r):
         st.caption("No encontré cotización de este CEDEAR en Yahoo. Puede que no exista, que "
                    "tenga otro ticker en BYMA o que Yahoo no lo cubra.")
         return
-
+ 
     h = r["hist"]
     precio_usa = float(h.iloc[-1]) if len(h) else r["precio"]
     fecha_usa = h.index[-1].strftime("%d/%m/%Y") if len(h) else "hoy"
     ccl, ccl_hora = dolar("contadoconliqui")
-
+ 
     oficial, origen = ratio_oficial(t)
     ratio = st.number_input(
         f"Ratio del CEDEAR de {t} (cuántos CEDEARs = 1 acción)",
@@ -963,22 +1032,22 @@ def bloque_cedear(r):
         pista = round(precio_usa * ccl / c["precio"])
         st.caption(f"No encontré el ratio oficial. Por los precios, parece ser {pista}:1 "
                    "(deducido, no oficial): confirmalo en tu broker antes de cargarlo.")
-
+ 
     base = (f'<div class="fila"><div>CEDEAR en BYMA<b>$ {fmt_num(c["precio"], 2)}</b>'
             f'cierre {c["fecha"]}</div><div>Acción en EE.UU.<b>USD {fmt_num(precio_usa, 2)}</b>'
             f'cierre {fecha_usa}</div>')
-
+ 
     if not ratio:
         st.markdown(f'<div class="ced" style="--c:{GRIS}">{base}</div>'
                     f'<div style="font-size:14px;opacity:.75">Cargá el ratio para ver a qué '
                     f"dólar estás comprando.</div></div>", unsafe_allow_html=True)
         return
-
+ 
     implicito = c["precio"] * ratio / precio_usa
     fila_ccl = (f'<div>CCL del mercado<b>$ {fmt_num(ccl, 2)}</b>'
                 f'DolarApi{" · " + ccl_hora if ccl_hora else ""}</div>' if ccl else "")
     fila_imp = f'<div>Dólar implícito<b>$ {fmt_num(implicito, 2)}</b>precio × ratio / precio EE.UU.</div>'
-
+ 
     if not ccl:
         titulo, color = "No pude traer el CCL para comparar", GRIS
     else:
@@ -995,7 +1064,7 @@ def bloque_cedear(r):
                              "(chequeá que el precio no sea viejo)"), VERDE
         else:
             titulo, color = f"Precio en línea con el CCL ({fmt_pct(prima)})", VERDE
-
+ 
     aviso = ""
     if c["fecha"] != fecha_usa:
         aviso = ('<div style="font-size:12px;opacity:.65;margin-top:8px">Los cierres son de '
@@ -1006,8 +1075,8 @@ def bloque_cedear(r):
         f'<div style="font-size:12px;opacity:.65;margin-top:8px">Usa el último precio operado. '
         f"Si el CEDEAR tiene poco volumen, mirá las puntas en tu broker antes de comprar.</div></div>",
         unsafe_allow_html=True)
-
-
+ 
+ 
 def grafico(r):
     h = r["hist"]
     if len(h) < 2:
@@ -1020,7 +1089,7 @@ def grafico(r):
     else:
         df = h.rename(r["ticker"]).to_frame()
     df = df / df.iloc[0] * 100
-
+ 
     var_t = df.iloc[-1, 0] / 100 - 1
     texto = f"Del {df.index[0]:%d/%m/%Y} al {df.index[-1]:%d/%m/%Y} · {r['ticker']} {fmt_pct(var_t)}"
     if df.shape[1] > 1:
@@ -1032,8 +1101,8 @@ def grafico(r):
     st.markdown(f'<div class="fechas">{texto}</div>', unsafe_allow_html=True)
     colores = ["#52627a", "#bf9a3e"][: df.shape[1]]
     st.line_chart(df, height=260, color=colores)
-
-
+ 
+ 
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
@@ -1043,7 +1112,7 @@ st.markdown(
     "Datos de Yahoo Finance: orientativos, verificá antes de decidir.</p></div>",
     unsafe_allow_html=True,
 )
-
+ 
 col_franja, col_boton = st.columns([6, 1], vertical_alignment="center")
 with col_boton:
     if st.button("🔄 Actualizar", use_container_width=True,
@@ -1053,14 +1122,14 @@ with col_boton:
         dolar.clear()
         serie.clear()
         precio_cedear.clear()
-
+ 
 ctx = contexto_mercado()
-
-
+ 
+ 
 def detalle(uso, hora):
     return f"{uso} · {hora}" if hora else f"{uso} · hora s/d"
-
-
+ 
+ 
 tasa_det = ""
 if ctx["cambio"] is not None:
     signo = "+" if ctx["cambio"] >= 0 else ""
@@ -1080,13 +1149,13 @@ with col_franja:
             f'<div class="d">{d}</div></div>' for l, v, d in franja) + "</div>",
         unsafe_allow_html=True,
     )
-
+ 
 with st.form("buscar", border=False):
     c1, c2 = st.columns([4, 1], vertical_alignment="bottom")
     entrada = c1.text_input("Tickers", placeholder="Ej: MELI, NU, CLX",
                             label_visibility="collapsed")
     enviar = c2.form_submit_button("Analizar")
-
+ 
 if enviar and entrada.strip():
     vistos, tickers = set(), []
     for t in entrada.replace(";", ",").replace(" ", ",").split(","):
@@ -1095,26 +1164,26 @@ if enviar and entrada.strip():
             vistos.add(t)
             tickers.append(t)
     st.session_state["tickers"] = tickers
-
+ 
 tickers = st.session_state.get("tickers", [])
-
+ 
 if tickers:
     resultados = []
     with st.spinner("Buscando datos en Yahoo Finance..."):
         for t in tickers:
             resultados.append(analizar(t))
-
+ 
     comparativa = html_comparativa(resultados)
     if comparativa:
         st.markdown(comparativa, unsafe_allow_html=True)
-
+ 
     if len(resultados) == 1:
         mostrar(resultados[0])
     else:
         for tab, r in zip(st.tabs([r["ticker"] for r in resultados]), resultados):
             with tab:
                 mostrar(r)
-
+ 
 with st.expander("¿Cómo se calcula la nota?"):
     st.markdown(
         "Cada indicador se pasa a un puntaje de 0 a 10 según su escala, y se promedian con "
@@ -1130,7 +1199,9 @@ with st.expander("¿Cómo se calcula la nota?"):
         "4. **Salud del balance (F-Score) — 15%.** Nueve pruebas que miran si la empresa mejora "
         "o empeora año contra año.\n"
         "5. **Deuda — 10%.** El riesgo de quiebra lo cubre además el Altman Z en los chequeos.\n"
-        "6. **ROE — 10%.** Se superpone con rentabilidad y se infla con recompras.\n"
+        "6. **ROIC — 10%.** Cuánto rinde el capital que usa el negocio. Se prefiere al ROE "
+        "porque este último se infla con recompras y con deuda; si no hay datos para "
+        "calcularlo, la tarjeta muestra el ROE.\n"
         "7. **Dividendo — 5%.** No predice retornos; si no paga, no resta.\n\n"
         "Lo que no aplica (deuda y F-Score en bancos, dividendo si no paga) se saca y el resto "
         "se re-reparte. Después se restan 1,5 puntos por cada alerta roja y 0,5 por cada "
@@ -1139,3 +1210,12 @@ with st.expander("¿Cómo se calcula la nota?"):
         "general, no están probados con datos históricos. La nota resume la salud financiera; "
         "no predice si la acción va a subir."
     )
+ 
+
+
+
+
+
+
+
+
