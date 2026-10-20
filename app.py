@@ -222,7 +222,7 @@ TRAMOS_CRECIMIENTO = [(0, "Malo", 0, ROJO), (0.05, "Flojo", 3, NARANJA),
                       (0.40, "Muy bueno", 9, VERDE), (INF, "Excelente", 10, VERDE_OSC)]
 
 
-def m_crecimiento(info):
+def m_crecimiento(info, ciclo=None):
     base = {"nombre": "Crecimiento: ventas y BPA", "icono": "📈", "corto": "Crecimiento",
             "peso": 15,
             "escala": "Negativo: malo · 0-5%: flojo · 5-10%: aceptable · 10-20%: bueno · "
@@ -241,6 +241,12 @@ def m_crecimiento(info):
     et, p, c = puntajes[-1] if bpa is not None else puntajes[0]
     if len(puntajes) == 2:
         p = round((puntajes[0][1] + puntajes[1][1] * 2) / 3)
+
+    if estado_ciclo(ciclo) == "pico" and p >= 8:
+        # Crecer mucho saliendo del piso del ciclo no es crecimiento sostenible
+        p = 7
+        et = et + " (pico de ciclo)"
+        c = AMARILLO
 
     if ventas is None:
         valor, frase = fmt_pct(bpa), f"Su ganancia por acción creció {fmt_pct(bpa)}."
@@ -286,12 +292,12 @@ def m_valuacion(info, ciclo=None):
     tipo = "esperadas" if forward is not None else "actuales"
     frase = f"Pagás {fmt_num(pe, 0)} años de ganancias {tipo}."
     if estado == "pico":
-        frase += (f" Pero su margen neto ({fmt_pct(ciclo['actual'], 0)}) está muy arriba de su "
-                  f"promedio de los últimos {ciclo['anios']} años ({fmt_pct(ciclo['promedio'], 0)}): "
+        frase += (f" Pero su margen neto ({fmt_pct(ciclo['actual'], 0)}) está muy arriba de la "
+                  f"mediana de los últimos {ciclo['anios']} años ({fmt_pct(ciclo['promedio'], 0)}): "
                   "si es cíclica, estarías pagando pocas veces una ganancia en su mejor momento.")
     elif estado == "piso":
-        frase += (f" Su margen neto ({fmt_pct(ciclo['actual'], 0)}) está muy por debajo de su "
-                  f"promedio de {fmt_pct(ciclo['promedio'], 0)}: la ganancia está deprimida, "
+        frase += (f" Su margen neto ({fmt_pct(ciclo['actual'], 0)}) está muy por debajo de la "
+                  f"mediana de {fmt_pct(ciclo['promedio'], 0)}: la ganancia está deprimida, "
                   "así que el PER se ve más alto de lo que sería con márgenes normales.")
     if pe < 10:
         frase += " Tan bajo a veces significa que el mercado espera problemas."
@@ -352,18 +358,24 @@ def calcular_ciclo(fin):
     if len(margenes) < 3:
         return None
     actual, previos = margenes[0], margenes[1:]
-    promedio = sum(previos) / len(previos)
-    return {"actual": actual, "promedio": promedio, "anios": len(margenes),
-            "ratio": actual / promedio if promedio > 0 else None}
+    ordenados = sorted(previos)
+    medio = len(ordenados) // 2
+    # Mediana: un solo anio de perdidas fuertes no distorsiona la referencia
+    base = (ordenados[medio] if len(ordenados) % 2
+            else (ordenados[medio - 1] + ordenados[medio]) / 2)
+    return {"actual": actual, "promedio": base, "anios": len(margenes),
+            "ratio": actual / base if base > 0 else None}
 
 
 def estado_ciclo(ciclo):
-    """'pico', 'piso' o None."""
-    if not ciclo or ciclo["ratio"] is None or ciclo["actual"] <= 0:
+    """'pico', 'piso' o None. Compara el margen del último año con su mediana previa."""
+    if not ciclo:
         return None
-    if ciclo["ratio"] >= 1.5:
+    actual, base = ciclo["actual"], ciclo["promedio"]
+    salto = actual - base
+    if actual > 0.03 and salto >= 0.10 and (base <= 0 or actual / base >= 1.5):
         return "pico"
-    if ciclo["ratio"] <= 0.6:
+    if base > 0.03 and salto <= -0.10 and (actual <= 0 or actual / base <= 0.6):
         return "piso"
     return None
 
@@ -477,13 +489,13 @@ def chequeos(info, reverse_splits, dilucion, z=None, ciclo=None):
     chips = []
     estado = estado_ciclo(ciclo)
     if estado == "pico":
-        chips.append((f"Márgenes en máximos de {ciclo['anios']} años "
-                      f"({fmt_pct(ciclo['actual'], 0)} vs {fmt_pct(ciclo['promedio'], 0)})",
-                      AMARILLO))
+        chips.append((f"Márgenes en máximos de {ciclo['anios']} años: "
+                      f"{fmt_pct(ciclo['actual'], 0)} vs una mediana previa de "
+                      f"{fmt_pct(ciclo['promedio'], 0)}", AMARILLO))
     elif estado == "piso":
-        chips.append((f"Márgenes deprimidos vs su historia "
-                      f"({fmt_pct(ciclo['actual'], 0)} vs {fmt_pct(ciclo['promedio'], 0)})",
-                      AMARILLO))
+        chips.append((f"Márgenes deprimidos vs su historia: "
+                      f"{fmt_pct(ciclo['actual'], 0)} vs una mediana previa de "
+                      f"{fmt_pct(ciclo['promedio'], 0)}", AMARILLO))
     if z is not None and info.get("sector") not in SECTORES_FINANCIEROS:
         if z < 1.81:
             chips.append((f"Riesgo de quiebra alto (Altman Z {fmt_num(z, 2)})", ROJO))
@@ -876,7 +888,8 @@ def analizar(ticker):
         return {"ticker": ticker, "error": str(e)}
 
     # Orden = peso en la nota (de mayor a menor)
-    metricas = [m_margen(info), m_valuacion(info, ciclo), m_crecimiento(info), m_fscore(fscore, info),
+    metricas = [m_margen(info), m_valuacion(info, ciclo), m_crecimiento(info, ciclo),
+                m_fscore(fscore, info),
                 m_deuda(info), m_roic(roic, info), m_dividendo(info, precio)]
     validas = [m for m in metricas if m["puntos"] is not None]
     chips = chequeos(info, reverse, dilucion, zscore, ciclo)
