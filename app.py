@@ -259,7 +259,7 @@ def m_crecimiento(info):
     return resultado(base, valor, et, p, c, frase)
 
 
-def m_valuacion(info):
+def m_valuacion(info, ciclo=None):
     base = {"nombre": "Valuación (PER)", "icono": "🏷️", "corto": "Valuación", "peso": 20,
             "escala": "-10x: muy barato (ojo trampas) · 10-15x: barato · 15-22x: razonable · "
                       "22-30x: exigente · 30-45x: caro · +45x: muy caro. El crecimiento descontado supone "
@@ -276,8 +276,23 @@ def m_valuacion(info):
     et, p, c = escalon(pe, [(10, "Muy barato", 8, VERDE), (15, "Barato", 9, VERDE_OSC),
                             (22, "Razonable", 7, VERDE_CLARO), (30, "Exigente", 5, AMARILLO),
                             (45, "Caro", 3, NARANJA), (INF, "Muy caro", 1, ROJO)])
+    estado = estado_ciclo(ciclo)
+    if estado == "pico" and p >= 7:
+        # Un PER bajo sobre ganancias infladas no es barato: se acota el puntaje
+        p = 5
+        et = et + " (ojo ciclo)"
+        c = AMARILLO
+
     tipo = "esperadas" if forward is not None else "actuales"
     frase = f"Pagás {fmt_num(pe, 0)} años de ganancias {tipo}."
+    if estado == "pico":
+        frase += (f" Pero su margen neto ({fmt_pct(ciclo['actual'], 0)}) está muy arriba de su "
+                  f"promedio de los últimos {ciclo['anios']} años ({fmt_pct(ciclo['promedio'], 0)}): "
+                  "si es cíclica, estarías pagando pocas veces una ganancia en su mejor momento.")
+    elif estado == "piso":
+        frase += (f" Su margen neto ({fmt_pct(ciclo['actual'], 0)}) está muy por debajo de su "
+                  f"promedio de {fmt_pct(ciclo['promedio'], 0)}: la ganancia está deprimida, "
+                  "así que el PER se ve más alto de lo que sería con márgenes normales.")
     if pe < 10:
         frase += " Tan bajo a veces significa que el mercado espera problemas."
 
@@ -317,6 +332,40 @@ def m_deuda(info):
                             (3, "Flojo", 3, NARANJA), (INF, "Alto", 1, ROJO)])
     frase = f"Debe USD {fmt_num(de, 2)} por cada USD 1 de patrimonio."
     return resultado(base, fmt_x(de), et, p, c, frase)
+
+
+def calcular_ciclo(fin):
+    """Compara el margen neto del ultimo anio contra el promedio de los anteriores.
+
+    Sirve para detectar ciclicas en el pico: cuando los margenes estan muy arriba
+    de su propia historia, el PER se ve bajo porque la ganancia esta inflada.
+    """
+    REV = ["Total Revenue", "Operating Revenue"]
+    NI = ["Net Income", "Net Income Common Stockholders"]
+    if fin is None or getattr(fin, "empty", True):
+        return None
+    margenes = []
+    for col in range(fin.shape[1]):
+        rev, ni = fila(fin, REV, col), fila(fin, NI, col)
+        if rev and ni is not None and rev > 0:
+            margenes.append(ni / rev)
+    if len(margenes) < 3:
+        return None
+    actual, previos = margenes[0], margenes[1:]
+    promedio = sum(previos) / len(previos)
+    return {"actual": actual, "promedio": promedio, "anios": len(margenes),
+            "ratio": actual / promedio if promedio > 0 else None}
+
+
+def estado_ciclo(ciclo):
+    """'pico', 'piso' o None."""
+    if not ciclo or ciclo["ratio"] is None or ciclo["actual"] <= 0:
+        return None
+    if ciclo["ratio"] >= 1.5:
+        return "pico"
+    if ciclo["ratio"] <= 0.6:
+        return "piso"
+    return None
 
 
 def calcular_roic(fin, bal):
@@ -424,8 +473,17 @@ def m_fscore(fs, info):
     return {**resultado(base, valor, et, p, c, frase), "pruebas": fs["pruebas"]}
 
 
-def chequeos(info, reverse_splits, dilucion, z=None):
+def chequeos(info, reverse_splits, dilucion, z=None, ciclo=None):
     chips = []
+    estado = estado_ciclo(ciclo)
+    if estado == "pico":
+        chips.append((f"Márgenes en máximos de {ciclo['anios']} años "
+                      f"({fmt_pct(ciclo['actual'], 0)} vs {fmt_pct(ciclo['promedio'], 0)})",
+                      AMARILLO))
+    elif estado == "piso":
+        chips.append((f"Márgenes deprimidos vs su historia "
+                      f"({fmt_pct(ciclo['actual'], 0)} vs {fmt_pct(ciclo['promedio'], 0)})",
+                      AMARILLO))
     if z is not None and info.get("sector") not in SECTORES_FINANCIEROS:
         if z < 1.81:
             chips.append((f"Riesgo de quiebra alto (Altman Z {fmt_num(z, 2)})", ROJO))
@@ -571,10 +629,12 @@ def traer_datos(ticker):
         fscore = calcular_fscore(fin, bal, caja)
         zscore = calcular_zscore(fin, bal, info) if info else None
         roic = calcular_roic(fin, bal)
+        ciclo = calcular_ciclo(fin)
     except Exception:
-        fscore, zscore, roic = None, None, None
+        fscore, zscore, roic, ciclo = None, None, None, None
 
-    return info, precio, hist, reverse, dilucion, parcial, fscore, zscore, roic, detalle
+    return (info, precio, hist, reverse, dilucion, parcial, fscore, zscore, roic,
+            ciclo, detalle)
 
 
 ARGENTINA = timezone(timedelta(hours=-3))
@@ -811,15 +871,15 @@ def contexto_mercado():
 def analizar(ticker):
     try:
         (info, precio, hist, reverse, dilucion, parcial, fscore, zscore, roic,
-         detalle) = traer_datos(ticker)
+         ciclo, detalle) = traer_datos(ticker)
     except Exception as e:
         return {"ticker": ticker, "error": str(e)}
 
     # Orden = peso en la nota (de mayor a menor)
-    metricas = [m_margen(info), m_valuacion(info), m_crecimiento(info), m_fscore(fscore, info),
+    metricas = [m_margen(info), m_valuacion(info, ciclo), m_crecimiento(info), m_fscore(fscore, info),
                 m_deuda(info), m_roic(roic, info), m_dividendo(info, precio)]
     validas = [m for m in metricas if m["puntos"] is not None]
-    chips = chequeos(info, reverse, dilucion, zscore)
+    chips = chequeos(info, reverse, dilucion, zscore, ciclo)
     minimo = 4  # con menos indicadores que esto, la nota no es representativa
 
     # Penalizacion por riesgos: cada alerta roja resta 1,5 y cada amarilla 0,5
@@ -1191,7 +1251,9 @@ with st.expander("¿Cómo se calcula la nota?"):
         "2. **Valuación — 20%.** Comprar barato funcionó a largo plazo, aunque anduvo flojo en "
         "los últimos años. La tarjeta también muestra cuánto crecimiento de ganancias ya está "
         "incluido en el precio: si es mucho más que lo que crece hoy, el precio es exigente. "
-        "Ese dato es informativo y no suma ni resta a la nota.\n"
+        "Ese dato es informativo y no suma ni resta a la nota. Además compara el margen actual "
+        "contra el promedio de los últimos años: si está muy arriba, puede ser una cíclica en "
+        "el pico, donde un PER bajo engaña, y el puntaje se acota.\n"
         "3. **Crecimiento — 15%.** Importa para tu objetivo, pero por sí solo no predice "
         "retornos.\n"
         "4. **Salud del balance (F-Score) — 15%.** Nueve pruebas que miran si la empresa mejora "
